@@ -3,23 +3,6 @@ Camada de comunicação com o Mercado Livre — Fase 3.
 
 Faz o scraping da página pública de ofertas do Mercado Livre e devolve
 uma lista de promoções no formato usado pelo restante do bot.
-
-⚠️ IMPORTANTE — leia antes de rodar em produção:
-
-O Mercado Livre muda o layout/classes CSS da página de ofertas com
-frequência, e tem proteção anti-bot ativa. Este módulo foi escrito com
-os seletores mais comuns observados na estrutura atual do site, mas
-PRECISA ser validado manualmente antes de rodar de forma automática:
-
-    python -c "from app.mercado_livre import buscar_ofertas; import json; print(json.dumps(buscar_ofertas(), indent=2, ensure_ascii=False))"
-
-Se a lista vier vazia, os seletores em `_SELETORES` provavelmente
-precisam ser atualizados (inspecione a página no navegador e ajuste).
-
-Este módulo não faz nenhuma tentativa de burlar bloqueios, captcha ou
-login — se o Mercado Livre bloquear as requisições, o correto é reduzir
-a frequência (`SCRAPER_REQUEST_DELAY_SECONDS`) ou migrar para a API
-oficial de afiliados.
 """
 
 import logging
@@ -32,12 +15,11 @@ import requests
 from bs4 import BeautifulSoup
 
 from app import config
+from app.afiliados import gerar_link_afiliado
 
 logger = logging.getLogger(__name__)
 
 # Seletores CSS usados para extrair cada campo do card de produto.
-# Mantidos centralizados aqui para facilitar ajustes quando o Mercado
-# Livre mudar o layout.
 _SELETORES = {
     "card": [
         "div.andes-card.poly-card",
@@ -93,24 +75,32 @@ def calcular_desconto(preco_atual: float, preco_anterior: float) -> Optional[flo
     return round(desconto, 1)
 
 
+def limpar_url_produto(url: str) -> str:
+    """
+    Remove parâmetros desnecessários de tracking e hash da URL do produto
+    para enviar uma URL limpa para a API de afiliados.
+    """
+    if not url:
+        return url
+    parsed = urlparse(url)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+
+
 def montar_link_afiliado(url_produto: str) -> str:
     """
-    Acrescenta a tag de afiliado configurada (AFILIADO_ID) na URL do
-    produto. Se não houver tag configurada, devolve a URL original.
+    Gera o link oficial de afiliado (/social/...) usando a API interna
+    do portal de afiliados. Se falhar, retorna a URL original.
     """
-    if not config.AFILIADO_ID or not url_produto:
+    if not url_produto:
         return url_produto
 
-    partes = urlparse(url_produto)
-    query = f"matt_word={config.AFILIADO_ID}"
-    if partes.query:
-        query = f"{partes.query}&{query}"
-
-    return urlunparse(partes._replace(query=query))
+    url_limpa = limpar_url_produto(url_produto)
+    link_oficial = gerar_link_afiliado(url_limpa)
+    return link_oficial or url_produto
 
 
 def _buscar_pagina_html(url: str) -> Optional[str]:
-    headers = {"User-Agent": config.SCRAPER_USER_AGENT}
+    headers = {"User-Agent": getattr(config, "SCRAPER_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")}
     try:
         resposta = requests.get(url, headers=headers, timeout=15)
         resposta.raise_for_status()
@@ -130,7 +120,6 @@ def _extrair_promocao(card) -> Optional[dict]:
     preco_anterior = _parse_preco(_primeiro_texto(card, _SELETORES["preco_anterior"]))
 
     if not titulo or not url_produto or preco_atual is None:
-        # Card incompleto (ex.: propaganda, banner) — ignorar.
         return None
 
     desconto = calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None
@@ -142,20 +131,15 @@ def _extrair_promocao(card) -> Optional[dict]:
         "desconto": desconto,
         "imagem": imagem,
         "url_produto": url_produto,
-        "url_afiliado": montar_link_afiliado(url_produto),
-        # Cupons não ficam disponíveis na página pública de ofertas;
-        # fica como None a menos que seja preenchido manualmente depois.
-        "cupom": None,
+        "url_afiliado": None,
+        "cupom": getattr(config, "CUPOM_DESCONTO", None),
     }
 
 
 def buscar_ofertas(max_paginas: Optional[int] = None) -> list[dict]:
     """
     Busca ofertas na página pública do Mercado Livre e devolve uma lista
-    de dicts no formato usado pelo restante do bot (ver README).
-
-    Aplica um intervalo entre requisições (SCRAPER_REQUEST_DELAY_SECONDS)
-    para reduzir o risco de bloqueio.
+    de dicts com os links já convertidos para o formato oficial de afiliado.
     """
     max_paginas = max_paginas or config.SCRAPER_MAX_PAGINAS
     promocoes: list[dict] = []
@@ -179,11 +163,7 @@ def buscar_ofertas(max_paginas: Optional[int] = None) -> list[dict]:
                 break
 
         if not cards:
-            logger.warning(
-                "Nenhum card de produto encontrado na página %s — os seletores "
-                "em _SELETORES provavelmente precisam ser atualizados.",
-                pagina,
-            )
+            logger.warning("Nenhum card de produto encontrado na página %s", pagina)
             break
 
         for card in cards:
@@ -198,57 +178,13 @@ def buscar_ofertas(max_paginas: Optional[int] = None) -> list[dict]:
     return promocoes
 
 
-def debug_dump_primeiro_card(max_chars: int = 3000) -> None:
-    """
-    Função de apoio para ajustar os seletores: busca a página de ofertas,
-    localiza o primeiro card com o seletor que está funcionando, e
-    imprime o HTML dele formatado (truncado em `max_chars`).
-
-    Use isso quando `buscar_ofertas()` estiver retornando 0 itens mesmo
-    com `testar_conexao()` encontrando cards — o resultado impresso
-    mostra exatamente as classes reais de título, link, preço e imagem
-    pra ajustar `_SELETORES`.
-    """
-    html = _buscar_pagina_html(config.MERCADO_LIVRE_OFERTAS_URL)
-    if not html:
-        print("Não foi possível baixar a página.")
-        return
-
-    soup = BeautifulSoup(html, "html.parser")
-    card = None
-    for seletor in _SELETORES["card"]:
-        card = soup.select_one(seletor)
-        if card:
-            print(f"Usando seletor de card: '{seletor}'\n")
-            break
-
-    if not card:
-        print("Nenhum card encontrado com os seletores atuais.")
-        return
-
-    trecho = card.prettify()[:max_chars]
-    print(trecho)
-    if len(card.prettify()) > max_chars:
-        print(f"\n... (truncado — HTML completo tem {len(card.prettify())} caracteres)")
-
-
 def testar_conexao() -> bool:
-    """
-    Diagnóstico rápido: confirma se conseguimos acessar a página de
-    ofertas do Mercado Livre e encontrar produtos nela.
-
-    Como o scraper não usa login/token, "conectado" aqui significa:
-    (1) a requisição HTTP teve sucesso (status 200) e
-    (2) pelo menos um card de produto foi encontrado com os seletores
-        atuais.
-
-    Retorna True se ambas as condições forem atendidas.
-    """
+    """Diagnóstico rápido para testar o scraper e a geração de links."""
     print(f"Testando acesso a: {config.MERCADO_LIVRE_OFERTAS_URL}")
     html = _buscar_pagina_html(config.MERCADO_LIVRE_OFERTAS_URL)
 
     if not html:
-        print("❌ Não foi possível acessar a página (veja o log de erro acima).")
+        print("❌ Não foi possível acessar a página.")
         return False
 
     soup = BeautifulSoup(html, "html.parser")
@@ -256,21 +192,16 @@ def testar_conexao() -> bool:
     for seletor in _SELETORES["card"]:
         cards = soup.select(seletor)
         if cards:
-            print(f"✅ Página acessada. {len(cards)} cards encontrados com o seletor '{seletor}'.")
+            print(f"✅ Página acessada. {len(cards)} cards encontrados.")
             break
 
     if not cards:
-        print(
-            "⚠️ Página acessada com sucesso, mas nenhum card de produto foi "
-            "encontrado. Os seletores em _SELETORES provavelmente precisam "
-            "ser atualizados (inspecione a página no navegador)."
-        )
+        print("⚠️ Nenhum card encontrado com os seletores atuais.")
         return False
 
-    if config.AFILIADO_ID:
-        exemplo = montar_link_afiliado(cards[0].select_one("a") and cards[0].select_one("a").get("href", "") or "https://produto.mercadolivre.com.br/exemplo")
-        print(f"✅ Tag de afiliado configurada. Exemplo de link gerado:\n{exemplo}")
-    else:
-        print("⚠️ AFILIADO_ID não configurado no .env — os links não terão tag de afiliado.")
+    link_exemplo = cards[0].select_one("a") and cards[0].select_one("a").get("href", "")
+    if link_exemplo:
+        exemplo = montar_link_afiliado(link_exemplo)
+        print(f"✅ Teste de link gerado:\n{exemplo}")
 
     return True

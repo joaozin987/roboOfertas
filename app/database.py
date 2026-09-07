@@ -45,14 +45,28 @@ def inicializar_banco() -> None:
 
 def extrair_produto_id(url_produto: str) -> Optional[str]:
     """
-    Extrai o identificador do produto (ex.: 'MLB65588451') a partir da
-    URL do Mercado Livre. Usado como chave única para evitar duplicidade.
+    Extrai o identificador real do produto a partir da URL do Mercado Livre.
+    Evita pegar IDs de ofertas/deals presentes nos parâmetros da URL.
     """
+
     if not url_produto:
         return None
-    encontrado = re.search(r"(MLB-?\d+)", url_produto, re.IGNORECASE)
+
+    # 1. Produto de catálogo: /p/MLB12345678
+    encontrado = re.search(r"/p/(MLB\d+)", url_produto, re.IGNORECASE)
     if encontrado:
-        return encontrado.group(1).upper().replace("-", "")
+        return encontrado.group(1).upper()
+
+    # 2. Produto específico através do parâmetro wid
+    encontrado = re.search(r"[?&]wid=(MLB\d+)", url_produto, re.IGNORECASE)
+    if encontrado:
+        return encontrado.group(1).upper()
+
+    # 3. URL /up/MLBU...
+    encontrado = re.search(r"/up/(MLBU\d+)", url_produto, re.IGNORECASE)
+    if encontrado:
+        return encontrado.group(1).upper()
+
     return None
 
 

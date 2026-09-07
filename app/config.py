@@ -42,6 +42,7 @@ def _get_float(nome: str, padrao: float) -> float:
 # Telegram
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "")
+TELEGRAM_SEND_DELAY_SECONDS = _get_int("TELEGRAM_SEND_DELAY_SECONDS", 8)
 
 # Mercado Livre (usado a partir da Fase 3)
 MERCADO_LIVRE_CLIENT_ID = os.getenv("MERCADO_LIVRE_CLIENT_ID", "")
