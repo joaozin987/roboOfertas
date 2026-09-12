@@ -13,7 +13,6 @@ from app import config
 
 logger = logging.getLogger(__name__)
 
-# O Railway pode disponibilizar como MYSQL_URL ou DATABASE_URL
 DATABASE_URL = (
     os.getenv("MYSQL_URL")
     or os.getenv("DATABASE_URL")
@@ -21,11 +20,14 @@ DATABASE_URL = (
 )
 
 
+def _is_mysql() -> bool:
+    return bool(DATABASE_URL and "mysql" in DATABASE_URL.lower())
+
+
 def _get_connection():
-    if DATABASE_URL and ("mysql" in DATABASE_URL.lower()):
+    if _is_mysql():
         import pymysql
 
-        # Parseia a URL mysql://user:password@host:port/database
         parsed = urlparse(DATABASE_URL)
         return pymysql.connect(
             host=parsed.hostname,
@@ -34,7 +36,7 @@ def _get_connection():
             port=parsed.port or 3306,
             database=parsed.path.lstrip("/"),
             charset="utf8mb4",
-            autocommit=False,
+            autocommit=True,
         )
     else:
         import sqlite3
@@ -48,9 +50,10 @@ def _get_connection():
 
 def inicializar_banco() -> None:
     """Cria a tabela de promoções enviadas se ainda não existir."""
-    is_mysql = DATABASE_URL and ("mysql" in DATABASE_URL.lower())
+    tipo = "MySQL (Produção)" if _is_mysql() else "SQLite (Local/Fallback)"
+    logger.info("Inicializando conexão com o banco de dados: [%s]", tipo)
 
-    if is_mysql:
+    if _is_mysql():
         ddl = """
         CREATE TABLE IF NOT EXISTS promocoes (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -81,10 +84,14 @@ def inicializar_banco() -> None:
         );
         """
 
-    with _get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(ddl)
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(ddl)
         conn.commit()
+    finally:
+        cur.close()
+        conn.close()
 
 
 def extrair_produto_id(url: str) -> Optional[str]:
@@ -97,20 +104,23 @@ def extrair_produto_id(url: str) -> Optional[str]:
 
 def produto_ja_publicado(produto_id: str) -> bool:
     """Verifica se o ID já foi salvo anteriormente."""
-    query = "SELECT 1 FROM promocoes WHERE produto_id = %s LIMIT 1;" if (DATABASE_URL and "mysql" in DATABASE_URL.lower()) else "SELECT 1 FROM promocoes WHERE produto_id = ? LIMIT 1;"
+    placeholder = "%s" if _is_mysql() else "?"
+    query = f"SELECT 1 FROM promocoes WHERE produto_id = {placeholder} LIMIT 1;"
 
-    with _get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(query, (produto_id,))
-            resultado = cur.fetchone()
-            return resultado is not None
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(query, (produto_id,))
+        resultado = cur.fetchone()
+        return resultado is not None
+    finally:
+        cur.close()
+        conn.close()
 
 
 def salvar_promocao(promo: dict) -> None:
     """Persiste a promoção aprovada garantindo integridade de duplicados."""
-    is_mysql = DATABASE_URL and ("mysql" in DATABASE_URL.lower())
-
-    if is_mysql:
+    if _is_mysql():
         sql = """
         INSERT IGNORE INTO promocoes (
             produto_id, titulo, categoria, preco_atual, preco_anterior, desconto, url_produto, url_afiliado
@@ -134,7 +144,11 @@ def salvar_promocao(promo: dict) -> None:
         promo.get("url_afiliado"),
     )
 
-    with _get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, valores)
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, valores)
         conn.commit()
+    finally:
+        cur.close()
+        conn.close()
