@@ -2,16 +2,13 @@
 Regras de negócio das promoções — Fase 4.
 
 Responsável por:
-- filtrar ofertas por categoria;
+- filtrar ofertas por categoria sem bloquear os nichos oficiais;
 - filtrar por desconto mínimo;
 - filtrar por faixa de preço;
 - remover duplicados encontrados na mesma execução;
-- identificar a categoria do produto;
-- calcular uma pontuação para cada oferta;
+- calcular pontuação balanceada para cada oferta;
 - selecionar as melhores promoções;
-- montar a mensagem final para o Telegram.
-
-A verificação de "já publicado antes" fica no database.py/bot.py.
+- montar a mensagem final formatada para o Telegram.
 """
 
 import logging
@@ -22,251 +19,51 @@ from app import config
 
 logger = logging.getLogger(__name__)
 
-
 # ============================================================
-# CATEGORIAS E PALAVRAS-CHAVE
+# CATEGORIAS E PALAVRAS-CHAVE (FALLBACK)
 # ============================================================
 
 CATEGORIAS = {
-
     "tecnologia": [
-        "celular",
-        "smartphone",
-        "iphone",
-        "samsung",
-        "xiaomi",
-        "motorola",
-        "notebook",
-        "laptop",
-        "computador",
-        "pc gamer",
-        "monitor",
-        "monitor gamer",
-        "teclado",
-        "mouse",
-        "mouse gamer",
-        "headset",
-        "fone",
-        "fone bluetooth",
-        "airpods",
-        "ssd",
-        "hd externo",
-        "memoria ram",
-        "memoria",
-        "placa de video",
-        "placa mae",
-        "processador",
-        "cpu",
-        "gpu",
-        "fonte de computador",
-        "gabinete",
-        "webcam",
-        "microfone",
-        "tablet",
-        "smart tv",
-        "televisao",
-        "tv",
-        "tv box",
-        "chromecast",
-        "projetor",
-        "carregador",
-        "carregador sem fio",
-        "cabo usb",
-        "cabo hdmi",
-        "roteador",
-        "wifi",
-        "impressora",
-        "camera",
-        "camera de seguranca",
-        "smartwatch",
-        "relogio inteligente",
+        "celular", "smartphone", "iphone", "samsung", "xiaomi", "motorola",
+        "notebook", "laptop", "computador", "pc gamer", "monitor", "teclado",
+        "mouse", "headset", "fone", "fone bluetooth", "airpods", "ssd",
+        "hd externo", "memoria ram", "placa de video", "placa mae", "processador",
+        "carregador", "power bank", "smartwatch", "relogio inteligente", "tablet"
     ],
-
+    "moda": [
+        "camisa", "camiseta", "blusa", "calca", "jaqueta", "casaco", "moletom",
+        "vestido", "saia", "short", "bermuda", "cueca", "calcinha", "sutia",
+        "meia", "tenis", "sapato", "sandalia", "chinelo", "bota", "mochila",
+        "bolsa", "mala", "cinto", "bone", "relogio"
+    ],
     "cozinha": [
-        "air fryer",
-        "airfryer",
-        "fritadeira",
-        "liquidificador",
-        "mixer",
-        "batedeira",
-        "cafeteira",
-        "cafeira",
-        "panela",
-        "frigideira",
-        "panela de pressao",
-        "jogo de panelas",
-        "jogo de frigideiras",
-        "forma",
-        "assadeira",
-        "forno",
-        "microondas",
-        "micro-ondas",
-        "sandwichera",
-        "sanduicheira",
-        "churrasqueira",
-        "grill",
-        "processador de alimentos",
-        "espremedor",
-        "torneira gourmet",
-        "purificador",
-        "filtro de agua",
-        "garrafa termica",
-        "garrafa",
-        "pote",
-        "potes",
-        "potes hermeticos",
-        "organizador de cozinha",
-        "utensilios de cozinha",
-        "utensilio de cozinha",
-        "faqueiro",
-        "talheres",
-        "pratos",
-        "copos",
-        "xicara",
-        "caneca",
+        "air fryer", "airfryer", "fritadeira", "liquidificador", "mixer",
+        "batedeira", "cafeteira", "panela", "frigideira", "panela de pressao",
+        "jogo de panelas", "forno", "microondas", "sanduicheira", "churrasqueira",
+        "processador de alimentos", "potes", "faqueiro", "garrafa termica"
     ],
-
     "casa": [
-        "organizador",
-        "organizador de gaveta",
-        "organizador de armario",
-        "caixa organizadora",
-        "tapete",
-        "tapete sala",
-        "tapete quarto",
-        "cortina",
-        "persiana",
-        "luminaria",
-        "abajur",
-        "lampada",
-        "lampada led",
-        "ventilador",
-        "circulador de ar",
-        "aspirador",
-        "aspirador robo",
-        "vassoura",
-        "rodo",
-        "mop",
-        "produtos de limpeza",
-        "limpeza",
-        "varal",
-        "tábua de passar",
-        "tabua de passar",
-        "ferro de passar",
-        "cabide",
-        "espelho",
-        "almofada",
-        "travesseiro",
-        "roupa de cama",
-        "edredom",
-        "cobertor",
-        "decoracao",
-        "decoracao de casa",
-        "vaso",
-        "plantas",
-        "relogio de parede",
+        "organizador", "caixa organizadora", "tapete", "cortina", "luminaria",
+        "abajur", "lampada", "ventilador", "aspirador", "aspirador robo", "mop",
+        "limpeza", "ferro de passar", "espelho", "travesseiro", "edredom", "cobertor"
     ],
-
     "moveis": [
-        "mesa",
-        "mesa de computador",
-        "mesa gamer",
-        "escrivaninha",
-        "cadeira",
-        "cadeira gamer",
-        "cadeira de escritorio",
-        "sofa",
-        "sofa cama",
-        "poltrona",
-        "cama",
-        "cama box",
-        "beliche",
-        "colchao",
-        "guarda roupa",
-        "guarda-roupa",
-        "armario",
-        "armario de cozinha",
-        "comoda",
-        "gaveteiro",
-        "criado mudo",
-        "criado-mudo",
-        "estante",
-        "rack",
-        "painel para tv",
-        "aparador",
-        "buffet",
-        "puff",
-        "sapateira",
-        "banco",
-        "banqueta",
-        "mesa de jantar",
-        "mesa lateral",
-        "mesa de cabeceira",
+        "mesa", "escrivaninha", "cadeira", "cadeira gamer", "cadeira de escritorio",
+        "sofa", "poltrona", "cama", "colchao", "guarda roupa", "armario", "comoda",
+        "gaveteiro", "estante", "rack", "painel para tv"
     ],
-
     "games": [
-        "playstation",
-        "playstation 5",
-        "ps5",
-        "ps4",
-        "xbox",
-        "xbox series",
-        "xbox one",
-        "nintendo",
-        "nintendo switch",
-        "switch",
-        "steam deck",
-        "console",
-        "controle",
-        "controle ps5",
-        "controle ps4",
-        "controle xbox",
-        "joystick",
-        "gamepad",
-        "video game",
-        "videogame",
-        "game",
-        "gamer",
-        "cadeira gamer",
-        "headset gamer",
-        "teclado gamer",
-        "mouse gamer",
-        "volante gamer",
-        "pedal gamer",
-        "acessorios gamer",
+        "playstation", "ps5", "ps4", "xbox", "xbox series", "nintendo",
+        "nintendo switch", "console", "controle ps5", "controle xbox", "joystick", "game"
     ],
-
+    "esportes": [
+        "suplemento", "whey", "creatina", "halter", "anilhas", "colchonete",
+        "elastico", "garrafa", "bicicleta", "corda de pular", "luva de treino"
+    ],
     "ferramentas": [
-        "furadeira",
-        "parafusadeira",
-        "furadeira parafusadeira",
-        "martelete",
-        "esmerilhadeira",
-        "serra",
-        "serra circular",
-        "serra tico tico",
-        "lixadeira",
-        "plaina",
-        "compressor",
-        "chave de impacto",
-        "chave de fenda",
-        "chave philips",
-        "chave inglesa",
-        "kit ferramentas",
-        "kit de ferramentas",
-        "ferramenta",
-        "ferramentas",
-        "alicate",
-        "martelo",
-        "trena",
-        "nivel",
-        "nivel a laser",
-        "broca",
-        "jogo de chaves",
-        "caixa de ferramentas",
-        "torquimetro",
-        "solda",
-        "ferro de solda",
+        "furadeira", "parafusadeira", "esmerilhadeira", "serra", "lixadeira",
+        "compressor", "chave de fenda", "kit ferramentas", "alicate", "martelo", "trena"
     ],
 }
 
@@ -276,33 +73,13 @@ CATEGORIAS = {
 # ============================================================
 
 def _normalizar_texto(texto: str) -> str:
-    """
-    Remove acentos, converte para minúsculo e normaliza espaços.
-    """
-
+    """Remove acentos, converte para minúsculo e normaliza espaços."""
     if not texto:
         return ""
-
     texto = str(texto).lower().strip()
-
-    texto = unicodedata.normalize(
-        "NFD",
-        texto
-    )
-
-    texto = "".join(
-        caractere
-        for caractere in texto
-        if unicodedata.category(caractere) != "Mn"
-    )
-
-    texto = re.sub(
-        r"\s+",
-        " ",
-        texto
-    )
-
-    return texto
+    texto = unicodedata.normalize("NFD", texto)
+    texto = "".join(c for c in texto if unicodedata.category(c) != "Mn")
+    return re.sub(r"\s+", " ", texto)
 
 
 # ============================================================
@@ -310,42 +87,16 @@ def _normalizar_texto(texto: str) -> str:
 # ============================================================
 
 def obter_categorias_alvo() -> list[str]:
-    """
-    Lê CATEGORIAS_ALVO do config/.env.
-
-    Exemplo:
-
-    CATEGORIAS_ALVO=tecnologia,cozinha,casa,moveis
-
-    Se não estiver configurado, utiliza todas as categorias.
-    """
-
-    configuracao = getattr(
-        config,
-        "CATEGORIAS_ALVO",
-        ""
-    )
-
+    """Lê CATEGORIAS_ALVO do config. Se vazio, aceita todas."""
+    configuracao = getattr(config, "CATEGORIAS_ALVO", "")
     if not configuracao:
         return list(CATEGORIAS.keys())
 
     categorias = []
-
-    for categoria in configuracao.split(","):
-
-        categoria = _normalizar_texto(
-            categoria
-        ).strip()
-
-        if categoria in CATEGORIAS:
-            categorias.append(categoria)
-
-        else:
-            logger.warning(
-                "Categoria '%s' configurada, mas não existe.",
-                categoria
-            )
-
+    for cat in configuracao.split(","):
+        cat_norm = _normalizar_texto(cat).strip()
+        if cat_norm:
+            categorias.append(cat_norm)
     return categorias
 
 
@@ -353,55 +104,33 @@ def obter_categorias_alvo() -> list[str]:
 # IDENTIFICAÇÃO DA CATEGORIA
 # ============================================================
 
-def identificar_categoria(promocao: dict) -> str | None:
+def identificar_categoria(promocao: dict) -> str:
     """
-    Identifica a categoria da promoção usando o título.
-
-    Retorna:
-        "tecnologia"
-        "cozinha"
-        "casa"
-        "moveis"
-        "games"
-        "ferramentas"
-
-    ou None caso nenhuma categoria seja encontrada.
+    Retorna a categoria atribuída na coleta ou deduz pelo título via palavras-chave.
     """
+    # 1. Se a coleta do nicho já determinou uma categoria válida, preserva ela
+    cat_existente = promocao.get("categoria")
+    if cat_existente and cat_existente.lower() not in ["sem categoria", "ofertas", "destaques"]:
+        return cat_existente
 
-    titulo = _normalizar_texto(
-        promocao.get("titulo", "")
-    )
-
+    # 2. Fallback por palavras-chave no título
+    titulo = _normalizar_texto(promocao.get("titulo", ""))
     if not titulo:
-        return None
+        return "Destaques"
 
-    categorias_alvo = obter_categorias_alvo()
-
-    melhor_categoria = None
+    melhor_categoria = "Destaques"
     maior_pontuacao = 0
 
-    for categoria in categorias_alvo:
-
+    for categoria, palavras in CATEGORIAS.items():
         pontuacao = 0
-
-        for palavra in CATEGORIAS.get(categoria, []):
-
-            palavra_normalizada = _normalizar_texto(
-                palavra
-            )
-
-            if palavra_normalizada in titulo:
-
-                # Palavras maiores são mais específicas.
-                # Ex.: "monitor gamer" vale mais que "monitor".
-                pontuacao += len(
-                    palavra_normalizada.split()
-                )
+        for palavra in palavras:
+            palavra_norm = _normalizar_texto(palavra)
+            if palavra_norm in titulo:
+                pontuacao += len(palavra_norm.split())
 
         if pontuacao > maior_pontuacao:
-
             maior_pontuacao = pontuacao
-            melhor_categoria = categoria
+            melhor_categoria = categoria.capitalize()
 
     return melhor_categoria
 
@@ -410,45 +139,33 @@ def identificar_categoria(promocao: dict) -> str | None:
 # FILTRO POR CATEGORIA
 # ============================================================
 
-def filtrar_por_categoria(
-    promocoes: list[dict]
-) -> list[dict]:
+def filtrar_por_categoria(promocoes: list[dict]) -> list[dict]:
     """
-    Mantém somente produtos pertencentes às categorias configuradas.
+    Atribui a categoria correta e só filtra se CATEGORIAS_ALVO for restritivo.
     """
-
     aprovadas = []
-
-    categorias_alvo = obter_categorias_alvo()
-
-    if not categorias_alvo:
-        logger.warning(
-            "Nenhuma categoria válida configurada."
-        )
-        return []
+    config_alvo = getattr(config, "CATEGORIAS_ALVO", "").strip()
+    categorias_alvo = [c.strip().lower() for c in config_alvo.split(",") if c.strip()] if config_alvo else []
 
     for promocao in promocoes:
-
-        categoria = identificar_categoria(
-            promocao
-        )
-
-        if not categoria:
-            continue
-
+        categoria = identificar_categoria(promocao)
         promocao["categoria"] = categoria
 
-        aprovadas.append(
-            promocao
-        )
+        # Se CATEGORIAS_ALVO foi explicitamente preenchido no .env, filtra por ele
+        if categorias_alvo:
+            cat_norm = _normalizar_texto(categoria)
+            # Permite se a categoria coincidir ou se for originária do nicho
+            if any(alvo in cat_norm for alvo in categorias_alvo):
+                aprovadas.append(promocao)
+        else:
+            # Sem restrição rígida: aproveita 100% dos produtos do nicho
+            aprovadas.append(promocao)
 
     logger.info(
-        "%s de %s ofertas pertencem às categorias alvo: %s",
+        "%s de %s ofertas pertencem às categorias válidas.",
         len(aprovadas),
         len(promocoes),
-        ", ".join(categorias_alvo),
     )
-
     return aprovadas
 
 
@@ -456,57 +173,37 @@ def filtrar_por_categoria(
 # FILTRO DE DESCONTO E PREÇO
 # ============================================================
 
-def filtrar_ofertas(
-    promocoes: list[dict]
-) -> list[dict]:
-    """
-    Aplica os filtros configurados:
-
-    - DESCONTO_MINIMO
-    - PRECO_MINIMO
-    - PRECO_MAXIMO
-
-    Também descarta ofertas sem desconto calculável.
-    """
-
+def filtrar_ofertas(promocoes: list[dict]) -> list[dict]:
+    """Aplica os limites de DESCONTO_MINIMO, PRECO_MINIMO e PRECO_MAXIMO."""
     aprovadas = []
 
+    desconto_min = getattr(config, "DESCONTO_MINIMO", 15.0)
+    preco_min = getattr(config, "PRECO_MINIMO", 20.0)
+    preco_max = getattr(config, "PRECO_MAXIMO", 50000.0)
+
     for promocao in promocoes:
-
-        desconto = promocao.get(
-            "desconto"
-        )
-
-        preco_atual = promocao.get(
-            "preco_atual"
-        )
+        desconto = promocao.get("desconto")
+        preco_atual = promocao.get("preco_atual")
 
         if desconto is None or preco_atual is None:
             continue
 
-        if desconto < config.DESCONTO_MINIMO:
+        if desconto < desconto_min:
             continue
 
-        if (
-            preco_atual < config.PRECO_MINIMO
-            or preco_atual > config.PRECO_MAXIMO
-        ):
+        if preco_atual < preco_min or preco_atual > preco_max:
             continue
 
-        aprovadas.append(
-            promocao
-        )
+        aprovadas.append(promocao)
 
     logger.info(
-        "%s de %s ofertas aprovadas "
-        "(desconto >= %s%%, preço entre R$ %s e R$ %s)",
+        "%s de %s ofertas aprovadas (desconto >= %s%%, preço entre R$ %s e R$ %s)",
         len(aprovadas),
         len(promocoes),
-        config.DESCONTO_MINIMO,
-        config.PRECO_MINIMO,
-        config.PRECO_MAXIMO,
+        desconto_min,
+        preco_min,
+        preco_max,
     )
-
     return aprovadas
 
 
@@ -514,37 +211,17 @@ def filtrar_ofertas(
 # REMOVER DUPLICADAS
 # ============================================================
 
-def remover_duplicadas(
-    promocoes: list[dict]
-) -> list[dict]:
-    """
-    Remove ofertas repetidas dentro da mesma execução.
-
-    Usa a URL do produto como identificador.
-    """
-
+def remover_duplicadas(promocoes: list[dict]) -> list[dict]:
+    """Remove ofertas repetidas na mesma rodada pela URL."""
     vistos = set()
     unicas = []
 
     for promocao in promocoes:
-
-        identificador = promocao.get(
-            "url_produto"
-        )
-
-        if not identificador:
+        url = promocao.get("url_produto")
+        if not url or url in vistos:
             continue
-
-        if identificador in vistos:
-            continue
-
-        vistos.add(
-            identificador
-        )
-
-        unicas.append(
-            promocao
-        )
+        vistos.add(url)
+        unicas.append(promocao)
 
     return unicas
 
@@ -553,107 +230,37 @@ def remover_duplicadas(
 # PONTUAÇÃO DAS OFERTAS
 # ============================================================
 
-def calcular_pontuacao(
-    promocao: dict
-) -> float:
-    """
-    Calcula uma pontuação para determinar a qualidade da oferta.
-
-    A pontuação considera:
-
-    - categoria encontrada;
-    - percentual de desconto;
-    - presença de preço anterior;
-    - faixa de preço.
-
-    Quanto maior a pontuação, maior a prioridade.
-    """
-
+def calcular_pontuacao(promocao: dict) -> float:
+    """Calcula score de relevância da oferta."""
     pontuacao = 0.0
+    desconto = promocao.get("desconto") or 0
+    preco_atual = promocao.get("preco_atual") or 0
+    preco_anterior = promocao.get("preco_anterior")
 
-    desconto = promocao.get(
-        "desconto"
-    ) or 0
+    # Pontos pelo percentual de desconto
+    pontuacao += desconto / 4
 
-    preco_atual = promocao.get(
-        "preco_atual"
-    ) or 0
-
-    preco_anterior = promocao.get(
-        "preco_anterior"
-    )
-
-    categoria = promocao.get(
-        "categoria"
-    )
-
-    # --------------------------------------------------------
-    # Categoria
-    # --------------------------------------------------------
-
-    if categoria:
-        pontuacao += 10
-
-    # --------------------------------------------------------
-    # Desconto
-    # --------------------------------------------------------
-
-    # Cada 5% de desconto adiciona pontos.
-    pontuacao += desconto / 5
-
-    # Bônus para descontos realmente interessantes.
     if desconto >= 30:
         pontuacao += 5
-
-    if desconto >= 40:
-        pontuacao += 5
-
     if desconto >= 50:
-        pontuacao += 5
+        pontuacao += 8
 
-    # --------------------------------------------------------
-    # Preço anterior
-    # --------------------------------------------------------
-
+    # Presença de preço original comprovado
     if preco_anterior:
-        pontuacao += 3
+        pontuacao += 4
 
-    # --------------------------------------------------------
-    # Faixa de preço
-    # --------------------------------------------------------
+    # Faixas de preço com alta conversão
+    if 40 <= preco_atual <= 300:
+        pontuacao += 6
+    elif 300 < preco_atual <= 1500:
+        pontuacao += 4
 
-    # Pequeno bônus para produtos dentro de uma faixa
-    # normalmente interessante para compras por impulso.
-
-    if 50 <= preco_atual <= 500:
-        pontuacao += 5
-
-    elif 500 < preco_atual <= 1500:
-        pontuacao += 3
-
-    return round(
-        pontuacao,
-        2
-    )
+    return round(pontuacao, 2)
 
 
-# ============================================================
-# ATRIBUIR PONTUAÇÃO
-# ============================================================
-
-def pontuar_ofertas(
-    promocoes: list[dict]
-) -> list[dict]:
-    """
-    Calcula e adiciona a pontuação em cada promoção.
-    """
-
+def pontuar_ofertas(promocoes: list[dict]) -> list[dict]:
     for promocao in promocoes:
-
-        promocao["pontuacao"] = calcular_pontuacao(
-            promocao
-        )
-
+        promocao["pontuacao"] = calcular_pontuacao(promocao)
     return promocoes
 
 
@@ -661,49 +268,23 @@ def pontuar_ofertas(
 # SELECIONAR MELHORES
 # ============================================================
 
-def selecionar_melhores(
-    promocoes: list[dict],
-    limite: int | None = None
-) -> list[dict]:
-    """
-    Ordena as ofertas pela pontuação e devolve no máximo
-    `limite` produtos.
-    """
-
-    limite = (
-        limite
-        if limite is not None
-        else config.MAX_PROMOTIONS_PER_RUN
-    )
-
-    pontuar_ofertas(
-        promocoes
-    )
+def selecionar_melhores(promocoes: list[dict], limite: int | None = None) -> list[dict]:
+    limite = limite if limite is not None else getattr(config, "MAX_PROMOTIONS_PER_RUN", 3)
+    pontuar_ofertas(promocoes)
 
     ordenadas = sorted(
         promocoes,
-        key=lambda p: (
-            p.get("pontuacao") or 0,
-            p.get("desconto") or 0,
-        ),
+        key=lambda p: (p.get("pontuacao") or 0, p.get("desconto") or 0),
         reverse=True
     )
 
-    selecionadas = ordenadas[
-        :limite
-    ]
-
-    logger.info(
-        "%s promoções selecionadas para publicação",
-        len(selecionadas)
-    )
+    selecionadas = ordenadas[:limite]
+    logger.info("%s promoções selecionadas para publicação", len(selecionadas))
 
     for promocao in selecionadas:
-
         logger.info(
-            "🏆 %s | %s | %.1f%% desconto | "
-            "R$ %.2f | pontuação %.2f",
-            promocao.get("categoria", "sem categoria"),
+            "🏆 %s | %s | %.1f%% desconto | R$ %.2f | pontuação %.2f",
+            promocao.get("categoria", "Destaque"),
             promocao.get("titulo", "Produto"),
             promocao.get("desconto") or 0,
             promocao.get("preco_atual") or 0,
@@ -717,116 +298,71 @@ def selecionar_melhores(
 # FORMATAÇÃO DE PREÇO
 # ============================================================
 
-def _formatar_preco(
-    valor: float
-) -> str:
-
-    return (
-        f"R$ {valor:,.2f}"
-        .replace(",", "X")
-        .replace(".", ",")
-        .replace("X", ".")
-    )
+def _formatar_preco(valor: float) -> str:
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 # ============================================================
 # MONTAR MENSAGEM
 # ============================================================
 
-def montar_mensagem(
-    promocao: dict
-) -> str:
-    """
-    Monta a mensagem final para o Telegram.
-    """
+def montar_mensagem(promocao: dict) -> str:
+    """Monta a mensagem formatada para o Telegram."""
+    titulo = promocao.get("titulo", "Produto")
+    preco_atual = promocao.get("preco_atual")
+    preco_anterior = promocao.get("preco_anterior")
+    desconto = promocao.get("desconto")
+    cupom = promocao.get("cupom") or getattr(config, "CUPOM_DESCONTO", None)
+    link = promocao.get("url_afiliado") or promocao.get("url_produto")
+    categoria = promocao.get("categoria", "Destaque")
 
-    titulo = promocao.get(
-        "titulo",
-        "Produto"
-    )
+    # Mapeamento de emojis por nicho
+    emojis = {
+        "tecnologia": "💻",
+        "smartphones & celulares": "📱",
+        "celulares": "📱",
+        "moda & calcados": "👕",
+        "moda": "👕",
+        "calcados": "👟",
+        "cozinha": "🍳",
+        "casa": "🏠",
+        "casa & eletrodomesticos": "🏠",
+        "moveis": "🪑",
+        "games": "🎮",
+        "esportes & suplementos": "💪",
+        "esportes": "💪",
+        "beleza & cuidados": "✨",
+        "ferramentas & construcao": "🔧",
+        "ferramentas": "🔧",
+    }
 
-    preco_atual = promocao.get(
-        "preco_atual"
-    )
-
-    preco_anterior = promocao.get(
-        "preco_anterior"
-    )
-
-    desconto = promocao.get(
-        "desconto"
-    )
-
-    cupom = (
-        promocao.get("cupom")
-        or config.CUPOM_DESCONTO
-    )
-
-    link = (
-        promocao.get("url_afiliado")
-        or promocao.get("url_produto")
-    )
-
-    categoria = promocao.get(
-        "categoria"
-    )
+    cat_slug = _normalizar_texto(categoria)
+    emoji_header = "🛍️"
+    for key, icone in emojis.items():
+        if key in cat_slug:
+            emoji_header = icone
+            break
 
     linhas = [
         "🔥 OFERTA DO DIA",
         "",
-    ]
-
-    if categoria:
-        emojis_categoria = {
-            "tecnologia": "💻",
-            "cozinha": "🍳",
-            "casa": "🏠",
-            "moveis": "🪑",
-            "games": "🎮",
-            "ferramentas": "🔧",
-        }
-
-        emoji = emojis_categoria.get(
-            categoria,
-            "🛍️"
-        )
-
-        linhas.append(
-            f"{emoji} {categoria.upper()}"
-        )
-
-        linhas.append("")
-
-    linhas.extend([
+        f"{emoji_header} {categoria.upper()}",
+        "",
         f"🛍️ {titulo}",
         "",
-    ])
+    ]
 
     if preco_anterior:
-
-        linhas.append(
-            f"💰 De: {_formatar_preco(preco_anterior)}"
-        )
+        linhas.append(f"💰 De: {_formatar_preco(preco_anterior)}")
 
     if preco_atual is not None:
-
-        linhas.append(
-            f"🔥 Por: {_formatar_preco(preco_atual)}"
-        )
+        linhas.append(f"🔥 Por: {_formatar_preco(preco_atual)}")
 
     if desconto:
-
-        linhas.append(
-            f"📉 Desconto: {desconto:.0f}%"
-        )
+        linhas.append(f"📉 Desconto: {desconto:.0f}%")
 
     if cupom:
-
-        linhas.append("")
-
-        linhas.append(
-            f"🏷️ CUPOM: {cupom}"
-        )
+        linhas.extend(["", f"🏷️ CUPOM: {cupom}"])
 
     linhas.extend([
         "",
@@ -836,71 +372,21 @@ def montar_mensagem(
         "⚠️ Preço e disponibilidade podem mudar sem aviso.",
     ])
 
-    return "\n".join(
-        linhas
-    )
+    return "\n".join(linhas)
 
 
 # ============================================================
 # PIPELINE COMPLETO
 # ============================================================
 
-def preparar_promocoes_para_publicar(
-    promocoes_brutas: list[dict]
-) -> list[dict]:
-    """
-    Pipeline completo:
+def preparar_promocoes_para_publicar(promocoes_brutas: list[dict]) -> list[dict]:
+    logger.info("Iniciando processamento de %s ofertas...", len(promocoes_brutas))
 
-    1. Remove duplicados;
-    2. identifica categorias;
-    3. filtra por categoria;
-    4. filtra por desconto e preço;
-    5. calcula pontuação;
-    6. seleciona as melhores ofertas.
+    sem_duplicadas = remover_duplicadas(promocoes_brutas)
+    logger.info("Após remoção de duplicados: %s ofertas.", len(sem_duplicadas))
 
-    A verificação do banco fica no bot.py.
-    """
-
-    logger.info(
-        "Iniciando processamento de %s ofertas...",
-        len(promocoes_brutas)
-    )
-
-    # --------------------------------------------------------
-    # 1. Remove duplicados
-    # --------------------------------------------------------
-
-    sem_duplicadas = remover_duplicadas(
-        promocoes_brutas
-    )
-
-    logger.info(
-        "Após remoção de duplicados: %s ofertas.",
-        len(sem_duplicadas)
-    )
-
-    # --------------------------------------------------------
-    # 2. Filtra por categoria
-    # --------------------------------------------------------
-
-    por_categoria = filtrar_por_categoria(
-        sem_duplicadas
-    )
-
-    # --------------------------------------------------------
-    # 3. Filtra desconto e preço
-    # --------------------------------------------------------
-
-    aprovadas = filtrar_ofertas(
-        por_categoria
-    )
-
-    # --------------------------------------------------------
-    # 4. Seleciona melhores por pontuação
-    # --------------------------------------------------------
-
-    selecionadas = selecionar_melhores(
-        aprovadas
-    )
+    por_categoria = filtrar_por_categoria(sem_duplicadas)
+    aprovadas = filtrar_ofertas(por_categoria)
+    selecionadas = selecionar_melhores(aprovadas)
 
     return selecionadas
