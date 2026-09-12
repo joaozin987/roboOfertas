@@ -1,6 +1,7 @@
 import os
 import requests
 from typing import Optional
+from urllib.parse import urlparse, urlunparse
 from app import config
 
 API_URL = "https://www.mercadolivre.com.br/affiliate-program/api/v2/affiliates/createLink"
@@ -8,6 +9,14 @@ API_URL = "https://www.mercadolivre.com.br/affiliate-program/api/v2/affiliates/c
 
 def _obter_config(chave: str, padrao: str = "") -> str:
     return getattr(config, chave, None) or os.getenv(chave, padrao)
+
+
+def limpar_url(url: str) -> str:
+    """Remove parâmetros e âncoras (#reviews, etc.) para evitar rejeição da API."""
+    if not url:
+        return url
+    parsed = urlparse(url)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
 
 
 def gerar_link_afiliado(url_produto: str, usar_link_curto: bool = True) -> str:
@@ -24,6 +33,8 @@ def gerar_link_afiliado(url_produto: str, usar_link_curto: bool = True) -> str:
         print("[AVISO AFILIADOS] CSRF_TOKEN ou COOKIE_HEADER não configurados.")
         return url_produto
 
+    url_limpa = limpar_url(url_produto)
+
     headers = {
         "accept": "application/json, text/plain, */*",
         "accept-language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -36,7 +47,7 @@ def gerar_link_afiliado(url_produto: str, usar_link_curto: bool = True) -> str:
     }
 
     payload = {
-        "urls": [url_produto],
+        "urls": [url_limpa],
         "tag": affiliate_tag,
     }
 
@@ -62,15 +73,16 @@ def gerar_link_afiliado(url_produto: str, usar_link_curto: bool = True) -> str:
 
     return url_produto
 
-# if __name__ == "__main__":
-#     url = "https://www.mercadolivre.com.br/desempenadeira-de-aco-inox-25cm-para-acabamentos-profissionais-em-gesso-e-massa-corrida-liso-perfeito-aero-home/p/MLB65320859?product_trigger_id=MLB65320860&pdp_filters=shipping_time%3Anextday&applied_product_filters=MLB65320859&picker=true&quantity=1"
 
-#     print("URL original:")
-#     print(url)
+# Bloco de execução fora da função:
+if __name__ == "__main__":
+    url = "https://www.mercadolivre.com.br/mesa-de-computador-escrivaninha-preta-pe-metalon-industrial-120x60-jm3-moveis/p/MLB29873777#reviews"
 
-#     print("\nGerando link de afiliado...")
+    print("--- TESTE DE GERAÇÃO DE LINK ---")
+    print(f"URL original:\n{url}\n")
 
-#     link = gerar_link_afiliado(url)
+    print("Gerando link de afiliado...")
+    link = gerar_link_afiliado(url)
 
-#     print("\nLINK GERADO:")
-#     print(link)
+    print("\nLINK GERADO:")
+    print(link)

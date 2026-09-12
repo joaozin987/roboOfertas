@@ -1,14 +1,12 @@
 """
-Camada de comunicação com o Mercado Livre — Fase 3.
-
-Faz o scraping da página pública de ofertas do Mercado Livre e devolve
-uma lista de promoções no formato usado pelo restante do bot.
+Camada de comunicação com o Mercado Livre.
+Faz o scraping da página pública de ofertas com rotação por categorias oficiais.
 """
 
 import logging
 import re
 import time
-from typing import Optional
+from typing import Optional, List, Dict
 from urllib.parse import urlencode, urlparse, urlunparse
 
 import requests
@@ -19,17 +17,56 @@ from app.afiliados import gerar_link_afiliado
 
 logger = logging.getLogger(__name__)
 
-# Seletores CSS usados para extrair cada campo do card de produto.
+# Categorias oficiais do Mercado Livre Ofertas que usam o layout estável
+NICHOS_ESTRATEGICOS = [
+    {
+        "nome": "Tecnologia",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051", # Celulares e Telefonia
+    },
+    {
+        "nome": "Camisas Básicas",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1430", # Calçados, Roupas e Bolsas
+    },
+    {
+        "nome": "Academia",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1276", # Esportes e Fitness
+    },
+    {
+        "nome": "Beleza e Skincare",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1246", # Beleza e Cuidado Pessoal
+    },
+    {
+        "nome": "Estética Automotiva",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1743", # Acessórios para Veículos
+    },
+    {
+        "nome": "Produtos de Limpeza",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1574", # Casa, Móveis e Decoração
+    },
+]
+
 _SELETORES = {
     "card": [
         "div.andes-card.poly-card",
         "li.promotion-item",
         "div.poly-card",
     ],
-    "titulo": ["a.poly-component__title", "h2.poly-component__title", "a.promotion-item__link"],
-    "link": ["a.poly-component__title", "a.promotion-item__link"],
-    "imagem": ["img.poly-component__picture", "img.promotion-item__img"],
-    "preco_atual": ["div.poly-price__current span.andes-money-amount"],
+    "titulo": [
+        "a.poly-component__title",
+        "h2.poly-component__title",
+        "a.promotion-item__link",
+    ],
+    "link": [
+        "a.poly-component__title",
+        "a.promotion-item__link",
+    ],
+    "imagem": [
+        "img.poly-component__picture",
+        "img.promotion-item__img",
+    ],
+    "preco_atual": [
+        "div.poly-price__current span.andes-money-amount",
+    ],
     "preco_anterior": [
         "s.andes-money-amount--previous",
         "span.promotion-item__price-previous",
@@ -56,7 +93,6 @@ def _primeiro_atributo(elemento, seletores, atributo) -> Optional[str]:
 
 
 def _parse_preco(texto: Optional[str]) -> Optional[float]:
-    """Converte '1.234,56' ou '1234' (texto do site) para float."""
     if not texto:
         return None
     limpo = re.sub(r"[^\d,]", "", texto)
@@ -68,7 +104,6 @@ def _parse_preco(texto: Optional[str]) -> Optional[float]:
 
 
 def calcular_desconto(preco_atual: float, preco_anterior: float) -> Optional[float]:
-    """Calcula o percentual de desconto entre o preço anterior e o atual."""
     if not preco_anterior or preco_anterior <= 0:
         return None
     desconto = ((preco_anterior - preco_atual) / preco_anterior) * 100
@@ -76,10 +111,6 @@ def calcular_desconto(preco_atual: float, preco_anterior: float) -> Optional[flo
 
 
 def limpar_url_produto(url: str) -> str:
-    """
-    Remove parâmetros desnecessários de tracking e hash da URL do produto
-    para enviar uma URL limpa para a API de afiliados.
-    """
     if not url:
         return url
     parsed = urlparse(url)
@@ -87,34 +118,37 @@ def limpar_url_produto(url: str) -> str:
 
 
 def montar_link_afiliado(url_produto: str) -> str:
-    """
-    Gera o link oficial de afiliado (/social/...) usando a API interna
-    do portal de afiliados. Se falhar, retorna a URL original.
-    """
     if not url_produto:
         return url_produto
-
     url_limpa = limpar_url_produto(url_produto)
     link_oficial = gerar_link_afiliado(url_limpa)
     return link_oficial or url_produto
 
 
 def _buscar_pagina_html(url: str) -> Optional[str]:
-    headers = {"User-Agent": getattr(config, "SCRAPER_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")}
+    headers = {
+        "User-Agent": getattr(
+            config,
+            "SCRAPER_USER_AGENT",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
+    }
     try:
         resposta = requests.get(url, headers=headers, timeout=15)
         resposta.raise_for_status()
         return resposta.text
     except requests.RequestException as erro:
-        logger.error("Falha ao consultar página de ofertas do Mercado Livre: %s", erro)
+        logger.error("Falha ao consultar URL '%s': %s", url, erro)
         return None
 
 
 def _extrair_promocao(card) -> Optional[dict]:
     titulo = _primeiro_texto(card, _SELETORES["titulo"])
     url_produto = _primeiro_atributo(card, _SELETORES["link"], "href")
-    imagem = _primeiro_atributo(card, _SELETORES["imagem"], "src") or \
-        _primeiro_atributo(card, _SELETORES["imagem"], "data-src")
+    imagem = (
+        _primeiro_atributo(card, _SELETORES["imagem"], "src")
+        or _primeiro_atributo(card, _SELETORES["imagem"], "data-src")
+    )
 
     preco_atual = _parse_preco(_primeiro_texto(card, _SELETORES["preco_atual"]))
     preco_anterior = _parse_preco(_primeiro_texto(card, _SELETORES["preco_anterior"]))
@@ -136,20 +170,26 @@ def _extrair_promocao(card) -> Optional[dict]:
     }
 
 
-def buscar_ofertas(max_paginas: Optional[int] = None) -> list[dict]:
+def buscar_ofertas(
+    url_categoria: Optional[str] = None, max_paginas: Optional[int] = None
+) -> List[Dict]:
     """
-    Busca ofertas na página pública do Mercado Livre e devolve uma lista
-    de dicts com os links já convertidos para o formato oficial de afiliado.
+    Coleta ofertas usando a página nativa de ofertas do Mercado Livre,
+    aplicando a URL de categoria se fornecida.
     """
-    max_paginas = max_paginas or config.SCRAPER_MAX_PAGINAS
-    promocoes: list[dict] = []
+    max_paginas = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 1)
+    promocoes: List[Dict] = []
+
+    base_url = url_categoria or getattr(config, "MERCADO_LIVRE_OFERTAS_URL", "https://www.mercadolivre.com.br/ofertas")
 
     for pagina in range(1, max_paginas + 1):
-        url = config.MERCADO_LIVRE_OFERTAS_URL
         if pagina > 1:
-            url = f"{config.MERCADO_LIVRE_OFERTAS_URL}?{urlencode({'page': pagina})}"
+            divisor = "&" if "?" in base_url else "?"
+            url = f"{base_url}{divisor}page={pagina}"
+        else:
+            url = base_url
 
-        logger.info("Buscando ofertas (página %s)", pagina)
+        logger.info("Buscando ofertas da URL: %s", url)
         html = _buscar_pagina_html(url)
         if not html:
             break
@@ -163,7 +203,7 @@ def buscar_ofertas(max_paginas: Optional[int] = None) -> list[dict]:
                 break
 
         if not cards:
-            logger.warning("Nenhum card de produto encontrado na página %s", pagina)
+            logger.warning("Nenhum card encontrado em %s", url)
             break
 
         for card in cards:
@@ -172,36 +212,7 @@ def buscar_ofertas(max_paginas: Optional[int] = None) -> list[dict]:
                 promocoes.append(promocao)
 
         if pagina < max_paginas:
-            time.sleep(config.SCRAPER_REQUEST_DELAY_SECONDS)
+            time.sleep(getattr(config, "SCRAPER_REQUEST_DELAY_SECONDS", 2))
 
-    logger.info("%s produtos encontrados", len(promocoes))
+    logger.info("%d produtos encontrados", len(promocoes))
     return promocoes
-
-
-def testar_conexao() -> bool:
-    """Diagnóstico rápido para testar o scraper e a geração de links."""
-    print(f"Testando acesso a: {config.MERCADO_LIVRE_OFERTAS_URL}")
-    html = _buscar_pagina_html(config.MERCADO_LIVRE_OFERTAS_URL)
-
-    if not html:
-        print("❌ Não foi possível acessar a página.")
-        return False
-
-    soup = BeautifulSoup(html, "html.parser")
-    cards = []
-    for seletor in _SELETORES["card"]:
-        cards = soup.select(seletor)
-        if cards:
-            print(f"✅ Página acessada. {len(cards)} cards encontrados.")
-            break
-
-    if not cards:
-        print("⚠️ Nenhum card encontrado com os seletores atuais.")
-        return False
-
-    link_exemplo = cards[0].select_one("a") and cards[0].select_one("a").get("href", "")
-    if link_exemplo:
-        exemplo = montar_link_afiliado(link_exemplo)
-        print(f"✅ Teste de link gerado:\n{exemplo}")
-
-    return True

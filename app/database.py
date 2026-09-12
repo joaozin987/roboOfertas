@@ -5,12 +5,14 @@ Responsável por registrar promoções já publicadas, para que o bot
 nunca publique a mesma oferta duas vezes.
 """
 
+import hashlib
 import logging
 import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote
 
 from app import config
 
@@ -45,27 +47,44 @@ def inicializar_banco() -> None:
 
 def extrair_produto_id(url_produto: str) -> Optional[str]:
     """
-    Extrai o identificador real do produto a partir da URL do Mercado Livre.
-    Evita pegar IDs de ofertas/deals presentes nos parâmetros da URL.
+    Extrai o identificador único do produto da URL do Mercado Livre.
+    Cobre catálogo (/p/), anúncios padrão (/MLB-), parâmetros wid e redirects.
+    Se nenhum padrão de MLB for encontrado, gera um hash único da URL base.
     """
-
     if not url_produto:
         return None
 
-    # 1. Produto de catálogo: /p/MLB12345678
-    encontrado = re.search(r"/p/(MLB\d+)", url_produto, re.IGNORECASE)
+    url_decodificada = unquote(url_produto)
+
+    # 1. Anúncio de catálogo: /p/MLB12345678
+    encontrado = re.search(r"/p/(MLB\d+)", url_decodificada, re.IGNORECASE)
     if encontrado:
         return encontrado.group(1).upper()
 
-    # 2. Produto específico através do parâmetro wid
-    encontrado = re.search(r"[?&]wid=(MLB\d+)", url_produto, re.IGNORECASE)
+    # 2. Produto padrão: /MLB-1234567890 ou /MLB1234567890
+    encontrado = re.search(r"/(MLB-?\d{6,14})", url_decodificada, re.IGNORECASE)
+    if encontrado:
+        return encontrado.group(1).replace("-", "").upper()
+
+    # 3. Parâmetro wid: wid=MLB12345678
+    encontrado = re.search(r"[?&]wid=(MLB\d+)", url_decodificada, re.IGNORECASE)
     if encontrado:
         return encontrado.group(1).upper()
 
-    # 3. URL /up/MLBU...
-    encontrado = re.search(r"/up/(MLBU\d+)", url_produto, re.IGNORECASE)
+    # 4. URL /up/MLBU...
+    encontrado = re.search(r"/up/(MLBU\d+)", url_decodificada, re.IGNORECASE)
     if encontrado:
         return encontrado.group(1).upper()
+
+    # 5. Qualquer menção explícita a MLB seguida de números (ex: tracking links)
+    encontrado = re.search(r"(MLB-?\d{8,14})", url_decodificada, re.IGNORECASE)
+    if encontrado:
+        return encontrado.group(1).replace("-", "").upper()
+
+    # 6. Fallback final: se a URL for atípica, usa hash da URL sem parâmetros
+    url_base = url_decodificada.split("?")[0].rstrip("/")
+    if url_base:
+        return "HASH_" + hashlib.sha256(url_base.encode("utf-8")).hexdigest()[:16].upper()
 
     return None
 
@@ -84,11 +103,12 @@ def produto_ja_publicado(produto_id: Optional[str]) -> bool:
 
 def salvar_promocao(promocao: dict) -> None:
     """Registra a promoção publicada no banco, para não repetir depois."""
-    produto_id = extrair_produto_id(promocao.get("url_produto", ""))
+    # Usa o produto_id já injetado no dict ou extrai da URL
+    produto_id = promocao.get("produto_id") or extrair_produto_id(promocao.get("url_produto", ""))
+    
     if not produto_id:
         logger.warning(
-            "Não foi possível extrair produto_id de '%s' — promoção não será "
-            "registrada no banco (pode ser publicada de novo no futuro).",
+            "Não foi possível obter identificador de '%s' — produto não será gravado.",
             promocao.get("url_produto"),
         )
         return
@@ -113,6 +133,6 @@ def salvar_promocao(promocao: dict) -> None:
                     datetime.now().isoformat(timespec="seconds"),
                 ),
             )
+            conexao.commit()
         except sqlite3.IntegrityError:
-            # Corrida rara: já foi salvo entre a checagem e o insert.
             logger.info("Produto %s já estava salvo no banco.", produto_id)
