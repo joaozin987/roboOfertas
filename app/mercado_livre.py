@@ -18,30 +18,35 @@ from app.afiliados import gerar_link_afiliado
 logger = logging.getLogger(__name__)
 
 # Categorias oficiais do Mercado Livre Ofertas que usam o layout estável
+# Categorias oficiais do Mercado Livre Ofertas com rotação balanceada
 NICHOS_ESTRATEGICOS = [
     {
-        "nome": "Tecnologia",
-        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051", # Celulares e Telefonia
+        "nome": "Smartphones & Celulares",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051#deal_ids=MLB1051",
     },
     {
-        "nome": "Camisas Básicas",
-        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1430", # Calçados, Roupas e Bolsas
+        "nome": "Moda & Calçados",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1430",
     },
     {
-        "nome": "Academia",
-        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1276", # Esportes e Fitness
+        "nome": "Casa & Eletrodomésticos",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1574",
     },
     {
-        "nome": "Beleza e Skincare",
-        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1246", # Beleza e Cuidado Pessoal
+        "nome": "Esportes & Suplementos",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1276",
     },
     {
-        "nome": "Estética Automotiva",
-        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1743", # Acessórios para Veículos
+        "nome": "Informática & Games",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1648",
     },
     {
-        "nome": "Produtos de Limpeza",
-        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1574", # Casa, Móveis e Decoração
+        "nome": "Ferramentas & Construção",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1500",
+    },
+    {
+        "nome": "Beleza & Cuidados",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1246",
     },
 ]
 
@@ -142,7 +147,7 @@ def _buscar_pagina_html(url: str) -> Optional[str]:
         return None
 
 
-def _extrair_promocao(card) -> Optional[dict]:
+def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]:
     titulo = _primeiro_texto(card, _SELETORES["titulo"])
     url_produto = _primeiro_atributo(card, _SELETORES["link"], "href")
     imagem = (
@@ -160,6 +165,7 @@ def _extrair_promocao(card) -> Optional[dict]:
 
     return {
         "titulo": titulo,
+        "categoria": categoria_nome,
         "preco_atual": preco_atual,
         "preco_anterior": preco_anterior,
         "desconto": desconto,
@@ -169,18 +175,20 @@ def _extrair_promocao(card) -> Optional[dict]:
         "cupom": getattr(config, "CUPOM_DESCONTO", None),
     }
 
-
 def buscar_ofertas(
     url_categoria: Optional[str] = None, max_paginas: Optional[int] = None
 ) -> List[Dict]:
-    """
-    Coleta ofertas usando a página nativa de ofertas do Mercado Livre,
-    aplicando a URL de categoria se fornecida.
-    """
     max_paginas = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 1)
     promocoes: List[Dict] = []
 
     base_url = url_categoria or getattr(config, "MERCADO_LIVRE_OFERTAS_URL", "https://www.mercadolivre.com.br/ofertas")
+
+    # Identifica o nome legível do nicho a partir da URL
+    categoria_nome = "Ofertas"
+    for nicho in NICHOS_ESTRATEGICOS:
+        if nicho["url"] == url_categoria:
+            categoria_nome = nicho["nome"]
+            break
 
     for pagina in range(1, max_paginas + 1):
         if pagina > 1:
@@ -207,12 +215,12 @@ def buscar_ofertas(
             break
 
         for card in cards:
-            promocao = _extrair_promocao(card)
+            promocao = _extrair_promocao(card, categoria_nome=categoria_nome)
             if promocao:
                 promocoes.append(promocao)
 
         if pagina < max_paginas:
             time.sleep(getattr(config, "SCRAPER_REQUEST_DELAY_SECONDS", 2))
 
-    logger.info("%d produtos encontrados", len(promocoes))
+    logger.info("%d produtos encontrados para [%s]", len(promocoes), categoria_nome)
     return promocoes
