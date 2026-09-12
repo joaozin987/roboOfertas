@@ -29,6 +29,10 @@ NICHOS_ESTRATEGICOS = [
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1430",
     },
     {
+        "nome": "corrida e esportes",
+        "url": "https://lista.mercadolivre.com.br/corrida#D[A:corrida]"
+    },
+    {
         "nome": "Estetica Automotiva",
         "url": "https://lista.mercadolivre.com.br/estetica-automotiva#D[A:Estetica%20automotiva]"
     },

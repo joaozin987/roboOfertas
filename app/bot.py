@@ -208,4 +208,4 @@ def rodar_loop():
             proximo_nicho
         )
 
-        time.sleep(intervalo_min * 60)
+        time.sleep(intervalo_min * 10)
