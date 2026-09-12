@@ -98,9 +98,10 @@ def extrair_produto_id(url: str) -> Optional[str]:
     """Extrai o ID canônico do Mercado Livre a partir da URL."""
     if not url:
         return None
-    match = re.search(r"(MLB[U]?\d+)", url)
-    return match.group(1) if match else None
-
+    match = re.search(r"(MLB[U]?-?\d+)", url)
+    if match:
+        return match.group(1).replace("-", "")
+    return None
 
 def produto_ja_publicado(produto_id: str) -> bool:
     """Verifica se o ID já foi salvo anteriormente."""

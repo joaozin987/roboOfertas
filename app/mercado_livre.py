@@ -29,6 +29,18 @@ NICHOS_ESTRATEGICOS = [
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1430",
     },
     {
+        "nome": "Estetica Automotiva",
+        "url": "https://lista.mercadolivre.com.br/estetica-automotiva#D[A:Estetica%20automotiva]"
+    },
+    {
+        "nome": "Itens para Setup",
+        "url": "https://lista.mercadolivre.com.br/monitores-teclados#D[A:monitores%20teclados]"
+    },
+    {
+        "nome": "Roupas para praticar Esportes",
+        "url": "https://lista.mercadolivre.com.br/roupas-academia?sb=all_mercadolibre#D[A:roupas%20academia]"
+    },
+    {
         "nome": "Casa & Eletrodomésticos",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1574",
     },
@@ -47,6 +59,10 @@ NICHOS_ESTRATEGICOS = [
     {
         "nome": "Beleza & Cuidados",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1246",
+    },
+    {
+        "nome": " Banheiro",
+        "url" : "https://lista.mercadolivre.com.br/banheiro?sb=all_mercadolibre#D[A:banheiro]"
     },
 ]
 
