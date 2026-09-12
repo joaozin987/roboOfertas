@@ -1,138 +1,140 @@
 """
-Camada de banco de dados (SQLite) — Fase 2.
-
-Responsável por registrar promoções já publicadas, para que o bot
-nunca publique a mesma oferta duas vezes.
+Camada de persistência de dados.
+Compatível com MySQL (Produção no Railway) e SQLite (Desenvolvimento local).
 """
 
-import hashlib
 import logging
+import os
 import re
-import sqlite3
-from datetime import datetime
-from pathlib import Path
 from typing import Optional
-from urllib.parse import unquote
+from urllib.parse import urlparse
 
 from app import config
 
 logger = logging.getLogger(__name__)
 
-_CRIAR_TABELA = """
-CREATE TABLE IF NOT EXISTS promocoes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    produto_id TEXT UNIQUE NOT NULL,
-    titulo TEXT NOT NULL,
-    preco_atual REAL,
-    preco_anterior REAL,
-    desconto REAL,
-    url_afiliado TEXT,
-    cupom TEXT,
-    enviado_em TEXT NOT NULL
-);
-"""
+# O Railway pode disponibilizar como MYSQL_URL ou DATABASE_URL
+DATABASE_URL = (
+    os.getenv("MYSQL_URL")
+    or os.getenv("DATABASE_URL")
+    or getattr(config, "DATABASE_URL", None)
+)
 
 
-def _get_connection() -> sqlite3.Connection:
-    caminho = Path(config.DATABASE_PATH)
-    caminho.parent.mkdir(parents=True, exist_ok=True)
-    return sqlite3.connect(caminho)
+def _get_connection():
+    if DATABASE_URL and ("mysql" in DATABASE_URL.lower()):
+        import pymysql
+
+        # Parseia a URL mysql://user:password@host:port/database
+        parsed = urlparse(DATABASE_URL)
+        return pymysql.connect(
+            host=parsed.hostname,
+            user=parsed.username,
+            password=parsed.password,
+            port=parsed.port or 3306,
+            database=parsed.path.lstrip("/"),
+            charset="utf8mb4",
+            autocommit=False,
+        )
+    else:
+        import sqlite3
+
+        caminho_banco = getattr(config, "DATABASE_PATH", "promocoes.db")
+        diretorio = os.path.dirname(caminho_banco)
+        if diretorio:
+            os.makedirs(diretorio, exist_ok=True)
+        return sqlite3.connect(caminho_banco)
 
 
 def inicializar_banco() -> None:
-    """Cria a tabela `promocoes`, se ainda não existir."""
-    with _get_connection() as conexao:
-        conexao.execute(_CRIAR_TABELA)
+    """Cria a tabela de promoções enviadas se ainda não existir."""
+    is_mysql = DATABASE_URL and ("mysql" in DATABASE_URL.lower())
+
+    if is_mysql:
+        ddl = """
+        CREATE TABLE IF NOT EXISTS promocoes (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            produto_id VARCHAR(50) NOT NULL UNIQUE,
+            titulo VARCHAR(500),
+            categoria VARCHAR(100),
+            preco_atual DECIMAL(10, 2),
+            preco_anterior DECIMAL(10, 2),
+            desconto DECIMAL(5, 2),
+            url_produto TEXT,
+            url_afiliado TEXT,
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    else:
+        ddl = """
+        CREATE TABLE IF NOT EXISTS promocoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            produto_id TEXT UNIQUE NOT NULL,
+            titulo TEXT,
+            categoria TEXT,
+            preco_atual REAL,
+            preco_anterior REAL,
+            desconto REAL,
+            url_produto TEXT,
+            url_afiliado TEXT,
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+
+    with _get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(ddl)
+        conn.commit()
 
 
-def extrair_produto_id(url_produto: str) -> Optional[str]:
-    """
-    Extrai o identificador único do produto da URL do Mercado Livre.
-    Cobre catálogo (/p/), anúncios padrão (/MLB-), parâmetros wid e redirects.
-    Se nenhum padrão de MLB for encontrado, gera um hash único da URL base.
-    """
-    if not url_produto:
+def extrair_produto_id(url: str) -> Optional[str]:
+    """Extrai o ID canônico do Mercado Livre a partir da URL."""
+    if not url:
         return None
-
-    url_decodificada = unquote(url_produto)
-
-    # 1. Anúncio de catálogo: /p/MLB12345678
-    encontrado = re.search(r"/p/(MLB\d+)", url_decodificada, re.IGNORECASE)
-    if encontrado:
-        return encontrado.group(1).upper()
-
-    # 2. Produto padrão: /MLB-1234567890 ou /MLB1234567890
-    encontrado = re.search(r"/(MLB-?\d{6,14})", url_decodificada, re.IGNORECASE)
-    if encontrado:
-        return encontrado.group(1).replace("-", "").upper()
-
-    # 3. Parâmetro wid: wid=MLB12345678
-    encontrado = re.search(r"[?&]wid=(MLB\d+)", url_decodificada, re.IGNORECASE)
-    if encontrado:
-        return encontrado.group(1).upper()
-
-    # 4. URL /up/MLBU...
-    encontrado = re.search(r"/up/(MLBU\d+)", url_decodificada, re.IGNORECASE)
-    if encontrado:
-        return encontrado.group(1).upper()
-
-    # 5. Qualquer menção explícita a MLB seguida de números (ex: tracking links)
-    encontrado = re.search(r"(MLB-?\d{8,14})", url_decodificada, re.IGNORECASE)
-    if encontrado:
-        return encontrado.group(1).replace("-", "").upper()
-
-    # 6. Fallback final: se a URL for atípica, usa hash da URL sem parâmetros
-    url_base = url_decodificada.split("?")[0].rstrip("/")
-    if url_base:
-        return "HASH_" + hashlib.sha256(url_base.encode("utf-8")).hexdigest()[:16].upper()
-
-    return None
+    match = re.search(r"(MLB[U]?\d+)", url)
+    return match.group(1) if match else None
 
 
-def produto_ja_publicado(produto_id: Optional[str]) -> bool:
-    """Verifica se um produto (pelo produto_id) já foi publicado antes."""
-    if not produto_id:
-        return False
+def produto_ja_publicado(produto_id: str) -> bool:
+    """Verifica se o ID já foi salvo anteriormente."""
+    query = "SELECT 1 FROM promocoes WHERE produto_id = %s LIMIT 1;" if (DATABASE_URL and "mysql" in DATABASE_URL.lower()) else "SELECT 1 FROM promocoes WHERE produto_id = ? LIMIT 1;"
 
-    with _get_connection() as conexao:
-        resultado = conexao.execute(
-            "SELECT 1 FROM promocoes WHERE produto_id = ? LIMIT 1", (produto_id,)
-        ).fetchone()
-        return resultado is not None
+    with _get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (produto_id,))
+            resultado = cur.fetchone()
+            return resultado is not None
 
 
-def salvar_promocao(promocao: dict) -> None:
-    """Registra a promoção publicada no banco, para não repetir depois."""
-    # Usa o produto_id já injetado no dict ou extrai da URL
-    produto_id = promocao.get("produto_id") or extrair_produto_id(promocao.get("url_produto", ""))
-    
-    if not produto_id:
-        logger.warning(
-            "Não foi possível obter identificador de '%s' — produto não será gravado.",
-            promocao.get("url_produto"),
-        )
-        return
+def salvar_promocao(promo: dict) -> None:
+    """Persiste a promoção aprovada garantindo integridade de duplicados."""
+    is_mysql = DATABASE_URL and ("mysql" in DATABASE_URL.lower())
 
-    with _get_connection() as conexao:
-        try:
-            conexao.execute(
-                """
-                INSERT INTO promocoes (
-                    produto_id, titulo, preco_atual, preco_anterior,
-                    desconto, url_afiliado, cupom, enviado_em
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    produto_id,
-                    promocao.get("titulo"),
-                    promocao.get("preco_atual"),
-                    promocao.get("preco_anterior"),
-                    promocao.get("desconto"),
-                    promocao.get("url_afiliado"),
-                    promocao.get("cupom"),
-                    datetime.now().isoformat(timespec="seconds"),
-                ),
-            )
-            conexao.commit()
-        except sqlite3.IntegrityError:
-            logger.info("Produto %s já estava salvo no banco.", produto_id)
+    if is_mysql:
+        sql = """
+        INSERT IGNORE INTO promocoes (
+            produto_id, titulo, categoria, preco_atual, preco_anterior, desconto, url_produto, url_afiliado
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+        """
+    else:
+        sql = """
+        INSERT OR IGNORE INTO promocoes (
+            produto_id, titulo, categoria, preco_atual, preco_anterior, desconto, url_produto, url_afiliado
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        """
+
+    valores = (
+        promo.get("produto_id"),
+        (promo.get("titulo") or "")[:500],
+        promo.get("categoria"),
+        promo.get("preco_atual"),
+        promo.get("preco_anterior"),
+        promo.get("desconto"),
+        promo.get("url_produto"),
+        promo.get("url_afiliado"),
+    )
+
+    with _get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, valores)
+        conn.commit()
