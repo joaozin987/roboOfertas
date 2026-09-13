@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 NICHOS_ESTRATEGICOS = [
     {
        "nome": "Aura beauty",
-       "url": ""
+       "url": "https://lista.mercadolivre.com.br/aura-beauty?sb=all_mercadolibre#D[A:Aura%20beauty]"
     },
     {
         "nome": "Smartphones & Celulares",
