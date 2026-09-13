@@ -1,6 +1,6 @@
 """
 Camada de persistência de dados.
-Compatível com MySQL (Produção no Railway) e SQLite (Desenvolvimento local).
+Compatível com MySQL (Railway) e SQLite (Desenvolvimento local).
 """
 
 import logging
@@ -13,22 +13,30 @@ from app import config
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = (
-    os.getenv("MYSQL_URL")
-    or os.getenv("DATABASE_URL")
-    or getattr(config, "DATABASE_URL", None)
-)
+
+def _obter_database_url() -> Optional[str]:
+    """Busca a URL do banco em tempo de execução em todas as chaves possíveis."""
+    return (
+        os.getenv("MYSQL_URL")
+        or os.getenv("MYSQLURL")
+        or os.getenv("DATABASE_URL")
+        or getattr(config, "MYSQL_URL", None)
+        or getattr(config, "DATABASE_URL", None)
+    )
 
 
 def _is_mysql() -> bool:
-    return bool(DATABASE_URL and "mysql" in DATABASE_URL.lower())
+    db_url = _obter_database_url()
+    return bool(db_url and ("mysql" in db_url.lower()))
 
 
 def _get_connection():
+    db_url = _obter_database_url()
+
     if _is_mysql():
         import pymysql
 
-        parsed = urlparse(DATABASE_URL)
+        parsed = urlparse(db_url)
         return pymysql.connect(
             host=parsed.hostname,
             user=parsed.username,
@@ -50,10 +58,8 @@ def _get_connection():
 
 def inicializar_banco() -> None:
     """Cria a tabela de promoções enviadas se ainda não existir."""
-    tipo = "MySQL (Produção)" if _is_mysql() else "SQLite (Local/Fallback)"
-    logger.info("Inicializando conexão com o banco de dados: [%s]", tipo)
-
     if _is_mysql():
+        logger.info("Inicializando conexão com o banco de dados: [MySQL (Produção)]")
         ddl = """
         CREATE TABLE IF NOT EXISTS promocoes (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -69,6 +75,10 @@ def inicializar_banco() -> None:
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
     else:
+        logger.warning(
+            "Inicializando conexão com o banco de dados: [SQLite (Fallback Local)]. "
+            "Nenhuma URL MySQL válida encontrada em MYSQL_URL/DATABASE_URL."
+        )
         ddl = """
         CREATE TABLE IF NOT EXISTS promocoes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +112,7 @@ def extrair_produto_id(url: str) -> Optional[str]:
     if match:
         return match.group(1).replace("-", "")
     return None
+
 
 def produto_ja_publicado(produto_id: str) -> bool:
     """Verifica se o ID já foi salvo anteriormente."""

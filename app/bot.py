@@ -1,20 +1,20 @@
 """
 Orquestrador principal do bot de promoções.
-Coordena a busca de ofertas por nicho cíclico, filtragem, validação no banco e envio ao Telegram.
+Coordena a busca de ofertas por nicho cíclico, filtragem, validação no banco e envio ao Telegram e WhatsApp.
 """
 
 import logging
 import time
 from typing import List, Dict
 
-from app import config, database, mercado_livre, promocoes, telegram
+from app import config, database, mercado_livre, promocoes, telegram, whatsapp
 
 logger = logging.getLogger(__name__)
 
 
 def enviar_mensagem_teste() -> bool:
-    """Envia uma mensagem de teste para validar a conexão com o Telegram."""
-    logger.info("Enviando mensagem de teste para o canal...")
+    """Envia uma mensagem de teste para validar a conexão com Telegram e WhatsApp."""
+    logger.info("Enviando mensagem de teste para os canais...")
 
     mensagem = (
         "🤖 *Bot de Promoções conectado com sucesso!*\n\n"
@@ -24,18 +24,22 @@ def enviar_mensagem_teste() -> bool:
         f"• Intervalo de ciclo: {getattr(config, 'CHECK_INTERVAL_MINUTES', 5)} min"
     )
 
+    sucesso_tg = False
     if hasattr(telegram, "enviar_mensagem"):
-        return telegram.enviar_mensagem(mensagem)
+        sucesso_tg = telegram.enviar_mensagem(mensagem)
 
-    return False
+    sucesso_wpp = False
+    if hasattr(whatsapp, "enviar_mensagem"):
+        sucesso_wpp = whatsapp.enviar_mensagem(mensagem)
+
+    return sucesso_tg or sucesso_wpp
 
 
 def _publicar_no_telegram(
     texto_mensagem: str,
     imagem_url: str = None
 ) -> bool:
-    """Tenta enviar foto com legenda; se não conseguir, envia apenas o texto."""
-
+    """Tenta enviar foto com legenda para o Telegram; se não conseguir, envia texto puro."""
     if imagem_url and hasattr(telegram, "enviar_foto"):
         try:
             return telegram.enviar_foto(
@@ -50,17 +54,51 @@ def _publicar_no_telegram(
                 )
             except Exception as err:
                 logger.warning(
-                    "Falha ao enviar com foto: %s. Tentando texto...",
+                    "Falha ao enviar com foto no Telegram: %s. Tentando texto...",
                     err
                 )
         except Exception as err:
             logger.warning(
-                "Falha ao enviar com foto: %s. Tentando texto...",
+                "Falha ao enviar com foto no Telegram: %s. Tentando texto...",
                 err
             )
 
     if hasattr(telegram, "enviar_mensagem"):
         return telegram.enviar_mensagem(texto_mensagem)
+
+    return False
+
+
+def _publicar_no_whatsapp(
+    texto_mensagem: str,
+    imagem_url: str = None
+) -> bool:
+    """Tenta enviar foto com legenda para o WhatsApp; se não conseguir, envia texto puro."""
+    if imagem_url and hasattr(whatsapp, "enviar_foto"):
+        try:
+            return whatsapp.enviar_foto(
+                imagem_url,
+                texto_mensagem
+            )
+        except TypeError:
+            try:
+                return whatsapp.enviar_foto(
+                    url_imagem=imagem_url,
+                    legenda=texto_mensagem
+                )
+            except Exception as err:
+                logger.warning(
+                    "Falha ao enviar com foto no WhatsApp: %s. Tentando texto...",
+                    err
+                )
+        except Exception as err:
+            logger.warning(
+                "Falha ao enviar com foto no WhatsApp: %s. Tentando texto...",
+                err
+            )
+
+    if hasattr(whatsapp, "enviar_mensagem"):
+        return whatsapp.enviar_mensagem(texto_mensagem)
 
     return False
 
@@ -139,15 +177,23 @@ def executar_ciclo(nicho: dict = None) -> int:
             continue
 
         logger.info(
-            "📢 Publicando no Telegram [%s]: %s (ID: %s)",
+            "📢 Publicando nos canais [%s]: %s (ID: %s)",
             nome_nicho,
             promo.get("titulo"),
             produto_id
         )
 
-        sucesso = _publicar_no_telegram(texto_mensagem, imagem_url)
+        # Disparo no Telegram
+        sucesso_tg = _publicar_no_telegram(texto_mensagem, imagem_url)
 
-        if sucesso:
+        # Respiro entre as duas APIs para evitar pico de requisições simultâneas
+        time.sleep(2)
+
+        # Disparo no WhatsApp
+        sucesso_wpp = _publicar_no_whatsapp(texto_mensagem, imagem_url)
+
+        # Salva no banco caso tenha sido entregue com sucesso em pelo menos um canal
+        if sucesso_tg or sucesso_wpp:
             database.salvar_promocao(promo)
             logger.info("💾 Produto %s salvo no banco.", produto_id)
             enviadas += 1
@@ -156,7 +202,7 @@ def executar_ciclo(nicho: dict = None) -> int:
                 time.sleep(delay_segundos)
         else:
             logger.warning(
-                "❌ Falha ao publicar %s. Não salvo no banco.",
+                "❌ Falha ao publicar %s em todos os canais. Não salvo no banco.",
                 produto_id
             )
 
@@ -208,4 +254,5 @@ def rodar_loop():
             proximo_nicho
         )
 
-        time.sleep(intervalo_min * 10)
+        # Multiplicação por 60 para converter os minutos em segundos corretamente
+        time.sleep(intervalo_min * 60)
