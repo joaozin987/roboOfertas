@@ -17,11 +17,11 @@ from app.afiliados import gerar_link_afiliado
 
 logger = logging.getLogger(__name__)
 
-# Categorias oficiais e buscas estratégicas do Mercado Livre
+# Categorias oficiais e nichos estratégicos com rotação balanceada
 NICHOS_ESTRATEGICOS = [
     {
-        "nome": "Aura beauty",
-        "url": "https://www.mercadolivre.com.br/ofertas?q=aura+beauty",
+        "nome": "Rare Beauty",
+        "url": "https://www.mercadolivre.com.br/ofertas?q=rare+beauty&category=MLB1246",
     },
     {
         "nome": "Smartphones & Celulares",
@@ -40,7 +40,7 @@ NICHOS_ESTRATEGICOS = [
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1747",
     },
     {
-        "nome": "Informática & Setup",
+        "nome": "Informática & Games",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1648",
     },
     {
@@ -177,6 +177,10 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
     preco_anterior = _parse_preco(_primeiro_texto(card, _SELETORES["preco_anterior"]))
 
     if not titulo or not url_produto or preco_atual is None:
+        return None
+
+    # Trava de segurança: garante que itens do nicho Rare Beauty sejam estritamente da marca
+    if categoria_nome == "Rare Beauty" and "rare beauty" not in titulo.lower():
         return None
 
     desconto = calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None
