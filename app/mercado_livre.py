@@ -53,6 +53,10 @@ NICHOS_ESTRATEGICOS = [
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1276",
     },
     {
+        "nome": "Huda beauty",
+        "url": "https://lista.mercadolivre.com.br/huda-beatuty-maquiagem#D[A:huda%20beatuty%20maquiagem]"
+    },
+    {
         "nome": "Informática & Games",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1648",
     },
