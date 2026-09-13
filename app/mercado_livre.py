@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 # Categorias oficiais do Mercado Livre Ofertas que usam o layout estável
 # Categorias oficiais do Mercado Livre Ofertas com rotação balanceada
 NICHOS_ESTRATEGICOS = [
-       {
-            "nome": "Huda beauty",
-            "url": "https://lista.mercadolivre.com.br/huda-beatuty-maquiagem#D[A:huda%20beatuty%20maquiagem]"
-        },
+    {
+       "nome": "Aura beauty",
+       "url": ""
+    },
     {
         "nome": "Smartphones & Celulares",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051#deal_ids=MLB1051",
