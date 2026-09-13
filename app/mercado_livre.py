@@ -7,7 +7,7 @@ import logging
 import re
 import time
 from typing import Optional, List, Dict
-from urllib.parse import urlencode, urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -17,48 +17,35 @@ from app.afiliados import gerar_link_afiliado
 
 logger = logging.getLogger(__name__)
 
-# Categorias oficiais do Mercado Livre Ofertas que usam o layout estável
-# Categorias oficiais do Mercado Livre Ofertas com rotação balanceada
+# Categorias oficiais e buscas estratégicas do Mercado Livre
 NICHOS_ESTRATEGICOS = [
     {
-       "nome": "Aura beauty",
-       "url": "https://lista.mercadolivre.com.br/aura-beauty?sb=all_mercadolibre#D[A:Aura%20beauty]"
+        "nome": "Aura beauty",
+        "url": "https://lista.mercadolivre.com.br/beleza-cuidado-pessoal/aura-beauty_OrderId_PRICE*DISCOUNT",
     },
     {
         "nome": "Smartphones & Celulares",
-        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051#deal_ids=MLB1051",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051",
     },
     {
         "nome": "Moda & Calçados",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1430",
     },
     {
-        "nome": "corrida e esportes",
-        "url": "https://lista.mercadolivre.com.br/corrida#D[A:corrida]"
+        "nome": "Corrida & Esportes",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1276",
     },
     {
-        "nome": "Estetica Automotiva",
-        "url": "https://lista.mercadolivre.com.br/estetica-automotiva#D[A:Estetica%20automotiva]"
+        "nome": "Estética Automotiva",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1747",
     },
     {
-        "nome": "Itens para Setup",
-        "url": "https://lista.mercadolivre.com.br/monitores-teclados#D[A:monitores%20teclados]"
-    },
-    {
-        "nome": "Roupas para praticar Esportes",
-        "url": "https://lista.mercadolivre.com.br/roupas-academia?sb=all_mercadolibre#D[A:roupas%20academia]"
+        "nome": "Informática & Setup",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1648",
     },
     {
         "nome": "Casa & Eletrodomésticos",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1574",
-    },
-    {
-        "nome": "Esportes & Suplementos",
-        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1276",
-    },
-    {
-        "nome": "Informática & Games",
-        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1648",
     },
     {
         "nome": "Ferramentas & Construção",
@@ -68,37 +55,44 @@ NICHOS_ESTRATEGICOS = [
         "nome": "Beleza & Cuidados",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1246",
     },
-    {
-        "nome": " Banheiro",
-        "url" : "https://lista.mercadolivre.com.br/banheiro?sb=all_mercadolibre#D[A:banheiro]"
-    },
 ]
 
 _SELETORES = {
     "card": [
         "div.andes-card.poly-card",
-        "li.promotion-item",
         "div.poly-card",
+        "li.promotion-item",
+        "li.ui-search-layout__item",
+        "div.ui-search-result__wrapper",
     ],
     "titulo": [
         "a.poly-component__title",
         "h2.poly-component__title",
         "a.promotion-item__link",
+        "h2.ui-search-item__title",
+        "a.ui-search-link",
     ],
     "link": [
         "a.poly-component__title",
         "a.promotion-item__link",
+        "a.ui-search-link",
+        "a.ui-search-item__group__element",
     ],
     "imagem": [
         "img.poly-component__picture",
         "img.promotion-item__img",
+        "img.ui-search-result-image__element",
     ],
     "preco_atual": [
         "div.poly-price__current span.andes-money-amount",
+        "div.ui-search-price__second-line span.andes-money-amount",
+        "div.ui-search-price--size-medium span.andes-money-amount",
     ],
     "preco_anterior": [
         "s.andes-money-amount--previous",
         "span.promotion-item__price-previous",
+        "s.ui-search-price__part--medium",
+        "s.ui-search-price__part",
     ],
 }
 
@@ -199,6 +193,7 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
         "cupom": getattr(config, "CUPOM_DESCONTO", None),
     }
 
+
 def buscar_ofertas(
     url_categoria: Optional[str] = None, max_paginas: Optional[int] = None
 ) -> List[Dict]:
@@ -207,7 +202,6 @@ def buscar_ofertas(
 
     base_url = url_categoria or getattr(config, "MERCADO_LIVRE_OFERTAS_URL", "https://www.mercadolivre.com.br/ofertas")
 
-    # Identifica o nome legível do nicho a partir da URL
     categoria_nome = "Ofertas"
     for nicho in NICHOS_ESTRATEGICOS:
         if nicho["url"] == url_categoria:
