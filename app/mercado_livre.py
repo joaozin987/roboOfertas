@@ -24,10 +24,6 @@ NICHOS_ESTRATEGICOS = [
         "url": "https://www.mercadolivre.com.br/ofertas?q=rare+beauty&category=MLB1246",
     },
     {
-        "nome": "Roupas leves e esportivas",
-        "url": "https://lista.mercadolivre.com.br/confira-camisa-de-corrida-unissex-ultraleve-de-secagem-r%C3%A1pid?sb=all_mercadolibre#D[A:Confira%20Camisa%20De%20Corrida%20Unissex%20Ultraleve%20De%20Secagem%20R%C3%A1pid]",
-    }
-    {
         "nome": "Smartphones & Celulares",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051",
     },
