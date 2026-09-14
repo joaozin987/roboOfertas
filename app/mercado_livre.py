@@ -1,6 +1,6 @@
 """
 Camada de comunicação com o Mercado Livre.
-Faz o scraping da página pública de ofertas com rotação por categorias oficiais.
+Scraping com evasão de bloqueio TLS via curl_cffi.
 """
 
 import logging
@@ -9,18 +9,17 @@ import time
 from typing import Optional, List, Dict
 from urllib.parse import urlparse, urlunparse
 
-import requests
 from bs4 import BeautifulSoup
+from curl_cffi import requests
 
 from app import config
 from app.afiliados import gerar_link_afiliado
 
 logger = logging.getLogger(__name__)
 
-# Sessão persistente para reutilizar conexões e cookies
-_session = requests.Session()
+# Sessão que emula o aperto de mão TLS/JA3 idêntico ao Google Chrome real
+_session = requests.Session(impersonate="chrome124")
 
-# Categorias oficiais e nichos estratégicos com rotação balanceada
 NICHOS_ESTRATEGICOS = [
     {
         "nome": "Aura Beauty",
@@ -159,34 +158,30 @@ def montar_link_afiliado(url_produto: str) -> str:
 
 def _buscar_pagina_html(url: str) -> Optional[str]:
     headers = {
-        "User-Agent": getattr(
-            config,
-            "SCRAPER_USER_AGENT",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
         "Sec-Fetch-Dest": "document",
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Site": "none",
         "Sec-Fetch-User": "?1",
-        "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
+        "Upgrade-Insecure-Requests": "1",
     }
     try:
-        resposta = _session.get(url, headers=headers, timeout=15)
+        # curl_cffi resolve o handshake TLS sem cair no filtro anti-bot básico
+        resposta = _session.get(url, headers=headers, timeout=20)
         resposta.raise_for_status()
 
-        if "captcha" in resposta.text.lower() or "robot" in resposta.text.lower():
-            logger.warning("Alerta: O Mercado Livre retornou tela de bloqueio/captcha para %s", url)
+        # Checagem de integridade: páginas reais de produtos têm dezenas/centenas de KB
+        if len(resposta.text) < 15000:
+            logger.warning(
+                "Possível bloqueio: resposta muito curta (%d bytes) para a URL: %s",
+                len(resposta.text),
+                url,
+            )
             return None
 
         return resposta.text
-    except requests.RequestException as erro:
+    except Exception as erro:
         logger.error("Falha ao consultar URL '%s': %s", url, erro)
         return None
 
@@ -205,7 +200,7 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
     if not titulo or not url_produto or preco_atual is None:
         return None
 
-    # Validação do nicho Aura Beauty para filtrar apenas produtos pertinentes
+    # Trava de segurança para nicho de marca específica
     if categoria_nome == "Aura Beauty" and "aura" not in titulo.lower():
         return None
 
@@ -225,7 +220,6 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
 
 
 def _montar_url_paginacao(base_url: str, pagina: int) -> str:
-    """Gera o link paginado tratando tanto rotas /ofertas quanto listagens comuns."""
     if pagina <= 1:
         return base_url
 
