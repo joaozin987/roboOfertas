@@ -152,22 +152,38 @@ def montar_link_afiliado(url_produto: str) -> str:
     return link_oficial or url_produto
 
 
+_session = requests.Session()
+
 def _buscar_pagina_html(url: str) -> Optional[str]:
     headers = {
-        "User-Agent": getattr(
-            config,
-            "SCRAPER_USER_AGENT",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        )
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
     }
     try:
-        resposta = requests.get(url, headers=headers, timeout=15)
+        resposta = _session.get(url, headers=headers, timeout=15)
         resposta.raise_for_status()
+        
+        # Log de diagnóstico: verifica se veio HTML real ou tela de captcha/bloqueio
+        if "captcha" in resposta.text.lower() or "robot" in resposta.text.lower():
+            logger.warning("Alerta: O Mercado Livre retornou tela de verificação (Captcha/Bot) para %s", url)
+            return None
+            
         return resposta.text
     except requests.RequestException as erro:
         logger.error("Falha ao consultar URL '%s': %s", url, erro)
         return None
-
 
 def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]:
     titulo = _primeiro_texto(card, _SELETORES["titulo"])
