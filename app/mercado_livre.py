@@ -24,6 +24,10 @@ NICHOS_ESTRATEGICOS = [
         "url": "https://www.mercadolivre.com.br/ofertas?q=rare+beauty&category=MLB1246",
     },
     {
+        "nome": "Aura Beauty",
+        "url": "https://www.mercadolivre.com.br/ofertas?q=aura+beauty&category=MLB1246",
+    },
+    {
         "nome": "Smartphones & Celulares",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051",
     },
@@ -56,6 +60,9 @@ NICHOS_ESTRATEGICOS = [
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1246",
     },
 ]
+
+# Nichos cuja trava de segurança exige que o título contenha a marca exata
+_MARCAS_ESTRITAS = {"Rare Beauty", "Aura Beauty"}
 
 _SELETORES = {
     "card": [
@@ -179,8 +186,9 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
     if not titulo or not url_produto or preco_atual is None:
         return None
 
-    # Trava de segurança: garante que itens do nicho Rare Beauty sejam estritamente da marca
-    if categoria_nome == "Rare Beauty" and "rare beauty" not in titulo.lower():
+    # Trava de segurança: garante que itens de nichos de marca específica
+    # (ex: Rare Beauty, Aura Beauty) sejam estritamente da marca anunciada
+    if categoria_nome in _MARCAS_ESTRITAS and categoria_nome.lower() not in titulo.lower():
         return None
 
     desconto = calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None
