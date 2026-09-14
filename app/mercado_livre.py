@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 
 # Categorias oficiais e nichos estratégicos com rotação balanceada
 NICHOS_ESTRATEGICOS = [
-    {
+   {
         "nome": "Aura Beauty",
-        "url": "https://lista.mercadolivre.com.br/aura-beauty",
+        "url": "https://lista.mercadolivre.com.br/aura-beauty_NoIndex_True",
     },
     {
         "nome": "Roupas leves e esportivas",
