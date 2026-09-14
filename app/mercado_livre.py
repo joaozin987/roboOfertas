@@ -20,8 +20,12 @@ logger = logging.getLogger(__name__)
 # Categorias oficiais e nichos estratégicos com rotação balanceada
 NICHOS_ESTRATEGICOS = [
     {
-        "nome": "Rare Beauty",
-        "url": "https://www.mercadolivre.com.br/ofertas?q=rare+beauty&category=MLB1246",
+        "nome": "Aura Beauty",
+        "url": "https://lista.mercadolivre.com.br/aura-beauty",
+    },
+    {
+        "nome": "Roupas leves e esportivas",
+        "url": "https://lista.mercadolivre.com.br/confira-camisa-de-corrida-unissex-ultraleve-de-secagem-r%C3%A1pid?sb=all_mercadolibre",
     },
     {
         "nome": "Smartphones & Celulares",
@@ -179,8 +183,8 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
     if not titulo or not url_produto or preco_atual is None:
         return None
 
-    # Trava de segurança: garante que itens do nicho Rare Beauty sejam estritamente da marca
-    if categoria_nome == "Rare Beauty" and "rare beauty" not in titulo.lower():
+    # Trava de segurança: garante que itens do nicho Aura Beauty contenham a palavra no título
+    if categoria_nome == "Aura Beauty" and "aura" not in titulo.lower():
         return None
 
     desconto = calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None
@@ -193,9 +197,26 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
         "desconto": desconto,
         "imagem": imagem,
         "url_produto": url_produto,
-        "url_afiliado": None,
+        "url_afiliado": montar_link_afiliado(url_produto),
         "cupom": getattr(config, "CUPOM_DESCONTO", None),
     }
+
+
+def _montar_url_paginacao(base_url: str, pagina: int) -> str:
+    """Gera o link paginado tratando rotas /ofertas e buscas padrao (lista.mercadolivre)."""
+    if pagina <= 1:
+        return base_url
+
+    parsed = urlparse(base_url)
+    # URLs de busca geral (lista.mercadolivre.com.br) paginam via sufixo de offset no path
+    if "lista.mercadolivre.com.br" in parsed.netloc:
+        offset = (pagina - 1) * 48 + 1
+        path = f"{parsed.path}_Desde_{offset}"
+        return urlunparse((parsed.scheme, parsed.netloc, path, parsed.params, parsed.query, parsed.fragment))
+
+    # Pagina padrao de ofertas aceita ?page=N ou &page=N
+    divisor = "&" if "?" in base_url else "?"
+    return f"{base_url}{divisor}page={pagina}"
 
 
 def buscar_ofertas(
@@ -213,11 +234,7 @@ def buscar_ofertas(
             break
 
     for pagina in range(1, max_paginas + 1):
-        if pagina > 1:
-            divisor = "&" if "?" in base_url else "?"
-            url = f"{base_url}{divisor}page={pagina}"
-        else:
-            url = base_url
+        url = _montar_url_paginacao(base_url, pagina)
 
         logger.info("Buscando ofertas da URL: %s", url)
         html = _buscar_pagina_html(url)
