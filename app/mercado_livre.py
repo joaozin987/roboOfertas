@@ -1,80 +1,137 @@
 """
 Camada de comunicação com o Mercado Livre.
-Coleta produtos e ofertas via API REST oficial e rotação de categorias.
+Faz o scraping da página pública de ofertas com rotação por categorias oficiais.
 """
 
 import logging
 import re
 import time
 from typing import Optional, List, Dict
-from urllib.parse import urlparse, parse_qs, urlunparse
+from urllib.parse import urlparse, urlunparse
 
-from curl_cffi import requests
+import requests
+from bs4 import BeautifulSoup
 
 from app import config
 from app.afiliados import gerar_link_afiliado
 
 logger = logging.getLogger(__name__)
 
-_session = requests.Session(impersonate="chrome124")
-
-# Nichos estratégicos configurados por termo de busca ou ID de categoria
+# Categorias oficiais e nichos estratégicos com rotação balanceada
 NICHOS_ESTRATEGICOS = [
     {
-        "nome": "Aura Beauty",
-        "tipo": "busca",
-        "termo": "aura beauty",
+        "nome": "Rare Beauty",
+        "url": "https://www.mercadolivre.com.br/ofertas?q=rare+beauty&category=MLB1246",
     },
     {
         "nome": "Roupas leves e esportivas",
-        "tipo": "busca",
-        "termo": "camisa corrida unissex secagem rapida",
-    },
+        "url": "https://lista.mercadolivre.com.br/confira-camisa-de-corrida-unissex-ultraleve-de-secagem-r%C3%A1pid?sb=all_mercadolibre#D[A:Confira%20Camisa%20De%20Corrida%20Unissex%20Ultraleve%20De%20Secagem%20R%C3%A1pid]",
+    }
     {
         "nome": "Smartphones & Celulares",
-        "tipo": "categoria",
-        "categoria_id": "MLB1051",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051",
     },
     {
         "nome": "Moda & Calçados",
-        "tipo": "categoria",
-        "categoria_id": "MLB1430",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1430",
     },
     {
         "nome": "Corrida & Esportes",
-        "tipo": "categoria",
-        "categoria_id": "MLB1276",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1276",
     },
     {
         "nome": "Estética Automotiva",
-        "tipo": "categoria",
-        "categoria_id": "MLB1747",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1747",
     },
     {
         "nome": "Informática & Games",
-        "tipo": "categoria",
-        "categoria_id": "MLB1648",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1648",
     },
     {
         "nome": "Casa & Eletrodomésticos",
-        "tipo": "categoria",
-        "categoria_id": "MLB1574",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1574",
     },
     {
         "nome": "Ferramentas & Construção",
-        "tipo": "categoria",
-        "categoria_id": "MLB1500",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1500",
     },
     {
         "nome": "Beleza & Cuidados",
-        "tipo": "categoria",
-        "categoria_id": "MLB1246",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1246",
     },
 ]
 
+_SELETORES = {
+    "card": [
+        "div.andes-card.poly-card",
+        "div.poly-card",
+        "li.promotion-item",
+        "li.ui-search-layout__item",
+        "div.ui-search-result__wrapper",
+    ],
+    "titulo": [
+        "a.poly-component__title",
+        "h2.poly-component__title",
+        "a.promotion-item__link",
+        "h2.ui-search-item__title",
+        "a.ui-search-link",
+    ],
+    "link": [
+        "a.poly-component__title",
+        "a.promotion-item__link",
+        "a.ui-search-link",
+        "a.ui-search-item__group__element",
+    ],
+    "imagem": [
+        "img.poly-component__picture",
+        "img.promotion-item__img",
+        "img.ui-search-result-image__element",
+    ],
+    "preco_atual": [
+        "div.poly-price__current span.andes-money-amount",
+        "div.ui-search-price__second-line span.andes-money-amount",
+        "div.ui-search-price--size-medium span.andes-money-amount",
+    ],
+    "preco_anterior": [
+        "s.andes-money-amount--previous",
+        "span.promotion-item__price-previous",
+        "s.ui-search-price__part--medium",
+        "s.ui-search-price__part",
+    ],
+}
+
+
+def _primeiro_texto(elemento, seletores) -> Optional[str]:
+    for seletor in seletores:
+        encontrado = elemento.select_one(seletor)
+        if encontrado:
+            texto = encontrado.get_text(strip=True)
+            if texto:
+                return texto
+    return None
+
+
+def _primeiro_atributo(elemento, seletores, atributo) -> Optional[str]:
+    for seletor in seletores:
+        encontrado = elemento.select_one(seletor)
+        if encontrado and encontrado.get(atributo):
+            return encontrado.get(atributo)
+    return None
+
+
+def _parse_preco(texto: Optional[str]) -> Optional[float]:
+    if not texto:
+        return None
+    limpo = re.sub(r"[^\d,]", "", texto)
+    limpo = limpo.replace(".", "").replace(",", ".")
+    try:
+        return float(limpo)
+    except ValueError:
+        return None
+
 
 def calcular_desconto(preco_atual: float, preco_anterior: float) -> Optional[float]:
-    if not preco_anterior or preco_anterior <= preco_atual:
+    if not preco_anterior or preco_anterior <= 0:
         return None
     desconto = ((preco_anterior - preco_atual) / preco_anterior) * 100
     return round(desconto, 1)
@@ -95,36 +152,39 @@ def montar_link_afiliado(url_produto: str) -> str:
     return link_oficial or url_produto
 
 
-def _consultar_api_ml(params: dict) -> Optional[dict]:
-    """Consulta a API aberta de busca do Mercado Livre Brasil (MLB)."""
-    url_api = "https://api.mercadolibre.com/sites/MLB/search"
+def _buscar_pagina_html(url: str) -> Optional[str]:
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json",
+        "User-Agent": getattr(
+            config,
+            "SCRAPER_USER_AGENT",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
     }
     try:
-        resp = _session.get(url_api, params=params, headers=headers, timeout=15)
-        if resp.status_code == 200:
-            return resp.json()
-        logger.error("API ML retornou status %d: %s", resp.status_code, resp.text[:200])
-        return None
-    except Exception as e:
-        logger.error("Erro ao chamar API do ML: %s", e)
+        resposta = requests.get(url, headers=headers, timeout=15)
+        resposta.raise_for_status()
+        return resposta.text
+    except requests.RequestException as erro:
+        logger.error("Falha ao consultar URL '%s': %s", url, erro)
         return None
 
 
-def _formatar_item_api(item: dict, categoria_nome: str) -> Optional[dict]:
-    titulo = item.get("title")
-    permalink = item.get("permalink")
-    preco_atual = item.get("price")
-    preco_anterior = item.get("original_price")
-    thumbnail = item.get("thumbnail", "").replace("-I.jpg", "-O.jpg")
+def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]:
+    titulo = _primeiro_texto(card, _SELETORES["titulo"])
+    url_produto = _primeiro_atributo(card, _SELETORES["link"], "href")
+    imagem = (
+        _primeiro_atributo(card, _SELETORES["imagem"], "src")
+        or _primeiro_atributo(card, _SELETORES["imagem"], "data-src")
+    )
 
-    if not titulo or not permalink or preco_atual is None:
+    preco_atual = _parse_preco(_primeiro_texto(card, _SELETORES["preco_atual"]))
+    preco_anterior = _parse_preco(_primeiro_texto(card, _SELETORES["preco_anterior"]))
+
+    if not titulo or not url_produto or preco_atual is None:
         return None
 
-    # Trava de pertinência para Aura Beauty
-    if categoria_nome == "Aura Beauty" and "aura" not in titulo.lower():
+    # Trava de segurança: garante que itens do nicho Rare Beauty sejam estritamente da marca
+    if categoria_nome == "Rare Beauty" and "rare beauty" not in titulo.lower():
         return None
 
     desconto = calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None
@@ -132,12 +192,12 @@ def _formatar_item_api(item: dict, categoria_nome: str) -> Optional[dict]:
     return {
         "titulo": titulo,
         "categoria": categoria_nome,
-        "preco_atual": float(preco_atual),
-        "preco_anterior": float(preco_anterior) if preco_anterior else None,
+        "preco_atual": preco_atual,
+        "preco_anterior": preco_anterior,
         "desconto": desconto,
-        "imagem": thumbnail,
-        "url_produto": permalink,
-        "url_afiliado": montar_link_afiliado(permalink),
+        "imagem": imagem,
+        "url_produto": url_produto,
+        "url_afiliado": None,
         "cupom": getattr(config, "CUPOM_DESCONTO", None),
     }
 
@@ -148,47 +208,42 @@ def buscar_ofertas(
     max_paginas = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 1)
     promocoes: List[Dict] = []
 
-    # Identifica o nicho atual ou usa padrão
-    nicho_atual = None
-    if url_categoria:
-        for n in NICHOS_ESTRATEGICOS:
-            if n.get("url") == url_categoria or n.get("termo") in url_categoria:
-                nicho_atual = n
-                break
+    base_url = url_categoria or getattr(config, "MERCADO_LIVRE_OFERTAS_URL", "https://www.mercadolivre.com.br/ofertas")
 
-    if not nicho_atual:
-        nicho_atual = NICHOS_ESTRATEGICOS[0]
-
-    categoria_nome = nicho_atual["nome"]
-    logger.info("Buscando produtos via API para [%s]...", categoria_nome)
-
-    limite_por_pagina = 48
+    categoria_nome = "Ofertas"
+    for nicho in NICHOS_ESTRATEGICOS:
+        if nicho["url"] == url_categoria:
+            categoria_nome = nicho["nome"]
+            break
 
     for pagina in range(1, max_paginas + 1):
-        offset = (pagina - 1) * limite_por_pagina
-        params = {
-            "limit": limite_por_pagina,
-            "offset": offset,
-        }
-
-        if nicho_atual.get("tipo") == "categoria":
-            params["category"] = nicho_atual["categoria_id"]
+        if pagina > 1:
+            divisor = "&" if "?" in base_url else "?"
+            url = f"{base_url}{divisor}page={pagina}"
         else:
-            params["q"] = nicho_atual["termo"]
+            url = base_url
 
-        dados = _consultar_api_ml(params)
-        if not dados:
+        logger.info("Buscando ofertas da URL: %s", url)
+        html = _buscar_pagina_html(url)
+        if not html:
             break
 
-        resultados = dados.get("results", [])
-        if not resultados:
-            logger.warning("Nenhum item retornado pela API para [%s]", categoria_nome)
+        soup = BeautifulSoup(html, "html.parser")
+
+        cards = []
+        for seletor in _SELETORES["card"]:
+            cards = soup.select(seletor)
+            if cards:
+                break
+
+        if not cards:
+            logger.warning("Nenhum card encontrado em %s", url)
             break
 
-        for item in resultados:
-            prod = _formatar_item_api(item, categoria_nome)
-            if prod:
-                promocoes.append(prod)
+        for card in cards:
+            promocao = _extrair_promocao(card, categoria_nome=categoria_nome)
+            if promocao:
+                promocoes.append(promocao)
 
         if pagina < max_paginas:
             time.sleep(getattr(config, "SCRAPER_REQUEST_DELAY_SECONDS", 2))
