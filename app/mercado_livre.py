@@ -25,7 +25,7 @@ NICHOS_ESTRATEGICOS = [
     },
     {
         "nome": "Aura Beauty",
-        "url": "https://www.mercadolivre.com.br/ofertas?q=aura+beauty&category=MLB1246",
+        "url": "https://www.mercadolivre.com.br/loja/aura-beauty",
     },
     {
         "nome": "Smartphones & Celulares",
@@ -63,6 +63,10 @@ NICHOS_ESTRATEGICOS = [
 
 # Nichos cuja trava de segurança exige que o título contenha a marca exata
 _MARCAS_ESTRITAS = {"Rare Beauty", "Aura Beauty"}
+
+# Nichos que apontam para página de loja (/loja/...), que não pagina via ?page=N
+# como a página de /ofertas — então não adianta tentar páginas extras.
+_NICHOS_PAGINA_UNICA = {"Aura Beauty"}
 
 _SELETORES = {
     "card": [
@@ -219,6 +223,9 @@ def buscar_ofertas(
         if nicho["url"] == url_categoria:
             categoria_nome = nicho["nome"]
             break
+
+    if categoria_nome in _NICHOS_PAGINA_UNICA:
+        max_paginas = 1
 
     for pagina in range(1, max_paginas + 1):
         if pagina > 1:
