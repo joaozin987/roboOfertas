@@ -17,9 +17,12 @@ from app.afiliados import gerar_link_afiliado
 
 logger = logging.getLogger(__name__)
 
+# Sessão persistente para reutilizar conexões e cookies
+_session = requests.Session()
+
 # Categorias oficiais e nichos estratégicos com rotação balanceada
 NICHOS_ESTRATEGICOS = [
-   {
+    {
         "nome": "Aura Beauty",
         "url": "https://lista.mercadolivre.com.br/aura-beauty_NoIndex_True",
     },
@@ -63,40 +66,42 @@ NICHOS_ESTRATEGICOS = [
 
 _SELETORES = {
     "card": [
+        "li.ui-search-layout__item",
+        "div.ui-search-result__wrapper",
         "div.andes-card.poly-card",
         "div.poly-card",
         "li.promotion-item",
-        "li.ui-search-layout__item",
-        "div.ui-search-result__wrapper",
+        "div.ui-search-result",
     ],
     "titulo": [
         "a.poly-component__title",
         "h2.poly-component__title",
-        "a.promotion-item__link",
         "h2.ui-search-item__title",
+        "a.promotion-item__link",
         "a.ui-search-link",
     ],
     "link": [
         "a.poly-component__title",
-        "a.promotion-item__link",
         "a.ui-search-link",
         "a.ui-search-item__group__element",
+        "a.promotion-item__link",
     ],
     "imagem": [
         "img.poly-component__picture",
-        "img.promotion-item__img",
         "img.ui-search-result-image__element",
+        "img.promotion-item__img",
     ],
     "preco_atual": [
         "div.poly-price__current span.andes-money-amount",
         "div.ui-search-price__second-line span.andes-money-amount",
         "div.ui-search-price--size-medium span.andes-money-amount",
+        "span.andes-money-amount.ui-search-price__part",
     ],
     "preco_anterior": [
         "s.andes-money-amount--previous",
-        "span.promotion-item__price-previous",
         "s.ui-search-price__part--medium",
         "s.ui-search-price__part",
+        "span.promotion-item__price-previous",
     ],
 }
 
@@ -152,14 +157,12 @@ def montar_link_afiliado(url_produto: str) -> str:
     return link_oficial or url_produto
 
 
-_session = requests.Session()
-
 def _buscar_pagina_html(url: str) -> Optional[str]:
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
+        "User-Agent": getattr(
+            config,
+            "SCRAPER_USER_AGENT",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -170,20 +173,23 @@ def _buscar_pagina_html(url: str) -> Optional[str]:
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Site": "none",
         "Sec-Fetch-User": "?1",
+        "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
     }
     try:
         resposta = _session.get(url, headers=headers, timeout=15)
         resposta.raise_for_status()
-        
-        # Log de diagnóstico: verifica se veio HTML real ou tela de captcha/bloqueio
+
         if "captcha" in resposta.text.lower() or "robot" in resposta.text.lower():
-            logger.warning("Alerta: O Mercado Livre retornou tela de verificação (Captcha/Bot) para %s", url)
+            logger.warning("Alerta: O Mercado Livre retornou tela de bloqueio/captcha para %s", url)
             return None
-            
+
         return resposta.text
     except requests.RequestException as erro:
         logger.error("Falha ao consultar URL '%s': %s", url, erro)
         return None
+
 
 def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]:
     titulo = _primeiro_texto(card, _SELETORES["titulo"])
@@ -199,7 +205,7 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
     if not titulo or not url_produto or preco_atual is None:
         return None
 
-    # Trava de segurança: garante que itens do nicho Aura Beauty contenham a palavra no título
+    # Validação do nicho Aura Beauty para filtrar apenas produtos pertinentes
     if categoria_nome == "Aura Beauty" and "aura" not in titulo.lower():
         return None
 
@@ -219,18 +225,16 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
 
 
 def _montar_url_paginacao(base_url: str, pagina: int) -> str:
-    """Gera o link paginado tratando rotas /ofertas e buscas padrao (lista.mercadolivre)."""
+    """Gera o link paginado tratando tanto rotas /ofertas quanto listagens comuns."""
     if pagina <= 1:
         return base_url
 
     parsed = urlparse(base_url)
-    # URLs de busca geral (lista.mercadolivre.com.br) paginam via sufixo de offset no path
     if "lista.mercadolivre.com.br" in parsed.netloc:
         offset = (pagina - 1) * 48 + 1
         path = f"{parsed.path}_Desde_{offset}"
         return urlunparse((parsed.scheme, parsed.netloc, path, parsed.params, parsed.query, parsed.fragment))
 
-    # Pagina padrao de ofertas aceita ?page=N ou &page=N
     divisor = "&" if "?" in base_url else "?"
     return f"{base_url}{divisor}page={pagina}"
 
@@ -261,8 +265,9 @@ def buscar_ofertas(
 
         cards = []
         for seletor in _SELETORES["card"]:
-            cards = soup.select(seletor)
-            if cards:
+            encontrados = soup.select(seletor)
+            if encontrados:
+                cards = encontrados
                 break
 
         if not cards:
