@@ -1,6 +1,7 @@
 """
 Orquestrador principal do bot de promoções.
-Coordena a busca de ofertas por nicho cíclico, filtragem, validação no banco e envio ao Telegram e WhatsApp.
+Coordena a busca de ofertas por nicho cíclico (Mercado Livre focado),
+filtragem com limites independentes, validação no banco e envio ao Telegram e WhatsApp.
 """
 
 import logging
@@ -8,6 +9,8 @@ import time
 from typing import List, Dict
 
 from app import config, database, mercado_livre, promocoes, telegram, whatsapp
+# [SHOPEE EM PAUSA] Reative quando validar os cliques no portal
+# from app import shopee
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +22,10 @@ def enviar_mensagem_teste() -> bool:
     mensagem = (
         "🤖 *Bot de Promoções conectado com sucesso!*\n\n"
         "Configurações ativas:\n"
-        f"• Desconto mínimo: {getattr(config, 'DESCONTO_MINIMO', 15)}%\n"
-        f"• Max por ciclo: {getattr(config, 'MAX_PROMOTIONS_PER_RUN', 1)}\n"
+        f"• ML Desconto Mínimo: {getattr(config, 'MELI_MIN_DESCONTO', getattr(config, 'DESCONTO_MINIMO', 70))}%\n"
+        f"• ML Max Envios: {getattr(config, 'MELI_MAX_ENVIOS', 5)}\n"
+        # f"• Shopee Desconto Mínimo: {getattr(config, 'SHOPEE_MIN_DESCONTO', 70)}%\n"
+        # f"• Shopee Max Envios: {getattr(config, 'SHOPEE_MAX_ENVIOS', 5)}\n"
         f"• Intervalo de ciclo: {getattr(config, 'CHECK_INTERVAL_MINUTES', 5)} min"
     )
 
@@ -35,33 +40,18 @@ def enviar_mensagem_teste() -> bool:
     return sucesso_tg or sucesso_wpp
 
 
-def _publicar_no_telegram(
-    texto_mensagem: str,
-    imagem_url: str = None
-) -> bool:
+def _publicar_no_telegram(texto_mensagem: str, imagem_url: str = None) -> bool:
     """Tenta enviar foto com legenda para o Telegram; se não conseguir, envia texto puro."""
     if imagem_url and hasattr(telegram, "enviar_foto"):
         try:
-            return telegram.enviar_foto(
-                imagem_url,
-                texto_mensagem
-            )
+            return telegram.enviar_foto(imagem_url, texto_mensagem)
         except TypeError:
             try:
-                return telegram.enviar_foto(
-                    url_imagem=imagem_url,
-                    legenda=texto_mensagem
-                )
+                return telegram.enviar_foto(url_imagem=imagem_url, legenda=texto_mensagem)
             except Exception as err:
-                logger.warning(
-                    "Falha ao enviar com foto no Telegram: %s. Tentando texto...",
-                    err
-                )
+                logger.warning("Falha ao enviar com foto no Telegram: %s. Tentando texto...", err)
         except Exception as err:
-            logger.warning(
-                "Falha ao enviar com foto no Telegram: %s. Tentando texto...",
-                err
-            )
+            logger.warning("Falha ao enviar com foto no Telegram: %s. Tentando texto...", err)
 
     if hasattr(telegram, "enviar_mensagem"):
         return telegram.enviar_mensagem(texto_mensagem)
@@ -69,33 +59,18 @@ def _publicar_no_telegram(
     return False
 
 
-def _publicar_no_whatsapp(
-    texto_mensagem: str,
-    imagem_url: str = None
-) -> bool:
+def _publicar_no_whatsapp(texto_mensagem: str, imagem_url: str = None) -> bool:
     """Tenta enviar foto com legenda para o WhatsApp; se não conseguir, envia texto puro."""
     if imagem_url and hasattr(whatsapp, "enviar_foto"):
         try:
-            return whatsapp.enviar_foto(
-                imagem_url,
-                texto_mensagem
-            )
+            return whatsapp.enviar_foto(imagem_url, texto_mensagem)
         except TypeError:
             try:
-                return whatsapp.enviar_foto(
-                    url_imagem=imagem_url,
-                    legenda=texto_mensagem
-                )
+                return whatsapp.enviar_foto(url_imagem=imagem_url, legenda=texto_mensagem)
             except Exception as err:
-                logger.warning(
-                    "Falha ao enviar com foto no WhatsApp: %s. Tentando texto...",
-                    err
-                )
+                logger.warning("Falha ao enviar com foto no WhatsApp: %s. Tentando texto...", err)
         except Exception as err:
-            logger.warning(
-                "Falha ao enviar com foto no WhatsApp: %s. Tentando texto...",
-                err
-            )
+            logger.warning("Falha ao enviar com foto no WhatsApp: %s. Tentando texto...", err)
 
     if hasattr(whatsapp, "enviar_mensagem"):
         return whatsapp.enviar_mensagem(texto_mensagem)
@@ -103,115 +78,106 @@ def _publicar_no_whatsapp(
     return False
 
 
+def _processar_e_publicar_oferta(promo: dict, delay_segundos: int) -> bool:
+    """Valida duplicidade, gera link de afiliado e dispara nos canais ativos."""
+    url_produto = promo.get("url_produto", "").strip()
+    produto_id = promo.get("produto_id") or database.extrair_produto_id(url_produto)
+
+    if not produto_id:
+        logger.warning("⚠️ Produto ignorado por falta de ID válido: %s", url_produto)
+        return False
+
+    promo["produto_id"] = str(produto_id)
+
+    if database.produto_ja_publicado(promo["produto_id"]):
+        logger.info("⏩ Produto %s já publicado anteriormente. Ignorando...", promo["produto_id"])
+        return False
+
+    # Gera link de afiliado Mercado Livre se ainda não tiver
+    if not promo.get("url_afiliado"):
+        logger.info("🔗 Gerando link de afiliado Mercado Livre para %s...", promo["produto_id"])
+        promo["url_afiliado"] = mercado_livre.montar_link_afiliado(url_produto)
+
+    texto_mensagem = promocoes.montar_mensagem(promo)
+    imagem_url = promo.get("imagem")
+
+    if getattr(config, "TEST_MODE", False):
+        logger.info("[TEST_MODE] Promoção aprovada (ID %s):\n%s\n", promo["produto_id"], texto_mensagem)
+        return True
+
+    logger.info(
+        "📢 Publicando [%s] nos canais: %s (ID: %s)",
+        promo.get("origem", "Mercado Livre"),
+        promo.get("titulo"),
+        promo["produto_id"]
+    )
+
+    # Disparo no Telegram
+    sucesso_tg = _publicar_no_telegram(texto_mensagem, imagem_url)
+
+    # Respiro de 2 segundos entre as duas APIs
+    time.sleep(2)
+
+    # Disparo no WhatsApp
+    sucesso_wpp = _publicar_no_whatsapp(texto_mensagem, imagem_url)
+
+    if sucesso_tg or sucesso_wpp:
+        database.salvar_promocao(promo)
+        logger.info("💾 Produto %s salvo no banco.", promo["produto_id"])
+        time.sleep(delay_segundos)
+        return True
+    else:
+        logger.warning("❌ Falha ao publicar %s em todos os canais. Não salvo no banco.", promo["produto_id"])
+        return False
+
+
 def executar_ciclo(nicho: dict = None) -> int:
     database.inicializar_banco()
 
     nome_nicho = nicho.get("nome", "Geral") if nicho else "Geral"
     url_categoria = nicho.get("url") if nicho else None
+    delay_segundos = getattr(config, "TELEGRAM_SEND_DELAY_SECONDS", 10)
 
     logger.info("=== Iniciando ciclo de busca: Nicho [%s] ===", nome_nicho)
 
-    ofertas_brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria)
+    # 1. Busca e filtragem do Mercado Livre
+    ofertas_meli_brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
+    ofertas_meli_aprovadas = promocoes.preparar_promocoes_para_publicar(ofertas_meli_brutas)
+    
+    # Aplica desconto mínimo do ML configurado
+    min_desc_meli = getattr(config, "MELI_MIN_DESCONTO", getattr(config, "DESCONTO_MINIMO", 70.0))
+    ofertas_meli_filtradas = [
+        p for p in ofertas_meli_aprovadas if (p.get("desconto") or 0) >= min_desc_meli
+    ]
+    max_envios_meli = getattr(config, "MELI_MAX_ENVIOS", 5)
 
-    if not ofertas_brutas:
-        logger.info("Nenhuma oferta encontrada para o nicho [%s].", nome_nicho)
-        return 0
+    # =========================================================================
+    # 2. Busca e filtragem da Shopee [EM PAUSA TEMPORÁRIA]
+    # =========================================================================
+    # min_desc_shopee = getattr(config, "SHOPEE_MIN_DESCONTO", 70.0)
+    # ofertas_shopee_brutas = []
+    # if 'shopee' in globals() and hasattr(shopee, "buscar_ofertas_shopee"):
+    #     try:
+    #         ofertas_shopee_brutas = shopee.buscar_ofertas_shopee(limite_minimo_desconto=min_desc_shopee) or []
+    #     except Exception as err_shopee:
+    #         logger.error("Falha ao buscar ofertas Shopee: %s", err_shopee)
+    # max_envios_shopee = getattr(config, "SHOPEE_MAX_ENVIOS", 5)
 
-    ofertas_filtradas = promocoes.preparar_promocoes_para_publicar(
-        ofertas_brutas
-    )
+    # 3. Fila de publicação focada no Mercado Livre
+    fila_publicacao: List[Dict] = ofertas_meli_filtradas[:max_envios_meli]
 
     logger.info(
-        "%d ofertas aprovadas após os filtros para [%s].",
-        len(ofertas_filtradas),
-        nome_nicho
+        "Fila montada para [%s]: %d ofertas do Mercado Livre prontas para envio.",
+        nome_nicho,
+        len(fila_publicacao)
     )
 
     enviadas = 0
-    max_envios = getattr(config, "MAX_PROMOTIONS_PER_RUN", 1)
-    delay_segundos = getattr(config, "TELEGRAM_SEND_DELAY_SECONDS", 8)
-
-    for promo in ofertas_filtradas:
-        if enviadas >= max_envios:
-            logger.info(
-                "Limite de %d envios atingido para este ciclo.",
-                max_envios
-            )
-            break
-
-        url_produto = promo.get("url_produto", "").strip()
-        produto_id = database.extrair_produto_id(url_produto)
-
-        if not produto_id:
-            logger.warning(
-                "⚠️ Produto ignorado por falta de ID válido: %s",
-                url_produto
-            )
-            continue
-
-        promo["produto_id"] = produto_id
-
-        if database.produto_ja_publicado(produto_id):
-            logger.info(
-                "⏩ Produto %s já publicado anteriormente. Ignorando...",
-                produto_id
-            )
-            continue
-
-        if not promo.get("url_afiliado"):
-            logger.info("🔗 Gerando link de afiliado para %s...", produto_id)
-            promo["url_afiliado"] = mercado_livre.montar_link_afiliado(
-                url_produto
-            )
-
-        texto_mensagem = promocoes.montar_mensagem(promo)
-        imagem_url = promo.get("imagem")
-
-        if getattr(config, "TEST_MODE", False):
-            logger.info(
-                "[TEST_MODE] Promoção aprovada (ID %s):\n%s\n",
-                produto_id,
-                texto_mensagem
-            )
-            enviadas += 1
-            continue
-
-        logger.info(
-            "📢 Publicando nos canais [%s]: %s (ID: %s)",
-            nome_nicho,
-            promo.get("titulo"),
-            produto_id
-        )
-
-        # Disparo no Telegram
-        sucesso_tg = _publicar_no_telegram(texto_mensagem, imagem_url)
-
-        # Respiro entre as duas APIs para evitar pico de requisições simultâneas
-        time.sleep(2)
-
-        # Disparo no WhatsApp
-        sucesso_wpp = _publicar_no_whatsapp(texto_mensagem, imagem_url)
-
-        # Salva no banco caso tenha sido entregue com sucesso em pelo menos um canal
-        if sucesso_tg or sucesso_wpp:
-            database.salvar_promocao(promo)
-            logger.info("💾 Produto %s salvo no banco.", produto_id)
+    for promo in fila_publicacao:
+        if _processar_e_publicar_oferta(promo, delay_segundos):
             enviadas += 1
 
-            if enviadas < max_envios:
-                time.sleep(delay_segundos)
-        else:
-            logger.warning(
-                "❌ Falha ao publicar %s em todos os canais. Não salvo no banco.",
-                produto_id
-            )
-
-    logger.info(
-        "Ciclo [%s] finalizado. Novas promoções publicadas: %d",
-        nome_nicho,
-        enviadas
-    )
-
+    logger.info("Ciclo [%s] finalizado. Novas promoções publicadas: %d", nome_nicho, enviadas)
     return enviadas
 
 
@@ -229,24 +195,15 @@ def rodar_loop():
         try:
             executar_ciclo(nicho=nicho_atual)
         except Exception as erro:
-            logger.error(
-                "Erro durante o ciclo: %s",
-                erro,
-                exc_info=True
-            )
+            logger.error("Erro durante o ciclo: %s", erro, exc_info=True)
 
-        # Avança para o próximo nicho na lista de forma circular
         if nichos:
             indice_atual = (indice_atual + 1) % total_nichos
             proximo_nicho = nichos[indice_atual]["nome"]
         else:
             proximo_nicho = "Geral"
 
-        intervalo_min = getattr(
-            config,
-            "CHECK_INTERVAL_MINUTES",
-            5
-        )
+        intervalo_min = getattr(config, "CHECK_INTERVAL_MINUTES", 5)
 
         logger.info(
             "Aguardando %d minutos. Próximo nicho na fila: [%s]",
@@ -254,5 +211,4 @@ def rodar_loop():
             proximo_nicho
         )
 
-        # Multiplicação por 60 para converter os minutos em segundos corretamente
         time.sleep(intervalo_min * 60)
