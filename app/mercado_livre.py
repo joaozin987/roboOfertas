@@ -1,6 +1,6 @@
 """
 Camada de comunicação com o Mercado Livre.
-Faz o scraping da página pública de ofertas com rotação por categorias oficiais de alta conversão.
+Faz o scraping da página pública de ofertas com rotação por categorias oficiais.
 """
 
 import logging
@@ -17,39 +17,40 @@ from app.afiliados import gerar_link_afiliado
 
 logger = logging.getLogger(__name__)
 
-# ==============================================================================
-# NICHOS ESTRATÉGICOS DE ALTO GIRO E CONVERSÃO (Produtos virais e ticket acessível)
-# ==============================================================================
+# Categorias oficiais e nichos estratégicos com rotação balanceada
 NICHOS_ESTRATEGICOS = [
     {
-        "nome": "Super Queimas & Relâmpago",
-        "url": "https://www.mercadolivre.com.br/ofertas",
+        "nome": "Smartphones & Celulares",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051",
     },
     {
-        "nome": "Casa & Cozinha Prática",
-        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1574",
-    },
-    {
-        "nome": "Eletrônicos & Acessórios",
-        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1000",
-    },
-    {
-        "nome": "Tênis & Moda Esportiva",
+        "nome": "Moda & Calçados",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1430",
     },
     {
-        "nome": "Cuidados Pessoais & Higiene",
-        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1246",
+        "nome": "Corrida & Esportes",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1276",
     },
     {
-        "nome": "Tech & Periféricos",
+        "nome": "Informática & Games",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1648",
-    }
+    },
+    {
+        "nome": "Casa & Eletrodomésticos",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1574",
+    },
+    {
+        "nome": "Beleza & Cuidados",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1246",
+    },
 ]
 
-# Sem amarras de lojas específicas agora — todos paginam normalmente via ?page=N
-_MARCAS_ESTRITAS = set()
-_NICHOS_PAGINA_UNICA = set()
+# Nichos cuja trava de segurança exige que o título contenha a marca exata
+_MARCAS_ESTRITAS = {"Rare Beauty", "Aura Beauty"}
+
+# Nichos que apontam para página de loja (/loja/...), que não pagina via ?page=N
+# como a página de /ofertas — então não adianta tentar páginas extras.
+_NICHOS_PAGINA_UNICA = {"Aura Beauty"}
 
 _SELETORES = {
     "card": [
@@ -173,12 +174,12 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
     if not titulo or not url_produto or preco_atual is None:
         return None
 
-    desconto = calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None
-
-    # Filtro inteligente de preço máximo para compras de impulso no WhatsApp:
-    # Produtos de mais de R$ 800 raramente convertem no clique rápido, foque no giro até R$ 500
-    if preco_atual > 800:
+    # Trava de segurança: garante que itens de nichos de marca específica
+    # (ex: Rare Beauty, Aura Beauty) sejam estritamente da marca anunciada
+    if categoria_nome in _MARCAS_ESTRITAS and categoria_nome.lower() not in titulo.lower():
         return None
+
+    desconto = calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None
 
     return {
         "titulo": titulo,
@@ -206,6 +207,9 @@ def buscar_ofertas(
         if nicho["url"] == url_categoria:
             categoria_nome = nicho["nome"]
             break
+
+    if categoria_nome in _NICHOS_PAGINA_UNICA:
+        max_paginas = 1
 
     for pagina in range(1, max_paginas + 1):
         if pagina > 1:

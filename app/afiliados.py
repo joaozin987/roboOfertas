@@ -74,7 +74,6 @@ def gerar_link_afiliado(url_produto: str, usar_link_curto: bool = True) -> str:
     return url_produto
 
 
-# Bloco de execução fora da função:
 if __name__ == "__main__":
     url = "https://www.mercadolivre.com.br/mesa-de-computador-escrivaninha-preta-pe-metalon-industrial-120x60-jm3-moveis/p/MLB29873777#reviews"
 
