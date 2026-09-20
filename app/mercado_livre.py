@@ -21,6 +21,10 @@ logger = logging.getLogger(__name__)
 # Categorias oficiais e nichos estratégicos com alta conversão e rotação balanceada
 NICHOS_ESTRATEGICOS = [
     {
+        "nome": "Carbogel & Energia Endurance",
+        "url": "https://lista.mercadolivre.com.br/gel-carboidrato_NoIndex_True",
+    },
+    {
         "nome": "Super Queimas & Liquidação",
         "url": "https://www.mercadolivre.com.br/ofertas",
     },
