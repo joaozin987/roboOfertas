@@ -1,6 +1,6 @@
 """
 Camada de comunicação com o Mercado Livre.
-Faz o scraping da página pública de ofertas com rotação por categorias oficiais e paginação dinâmica.
+Faz o scraping da página pública de ofertas e buscas com suporte a paginação dinâmica.
 """
 
 import logging
@@ -18,12 +18,9 @@ from app.afiliados import gerar_link_afiliado
 
 logger = logging.getLogger(__name__)
 
-# Categorias oficiais e nichos estratégicos com alta conversão e rotação balanceada
+# Categorias oficiais, buscas e nichos estratégicos com alta conversão
 NICHOS_ESTRATEGICOS = [
-    {
-        "nome": "Carbogel & Energia Endurance",
-        "url": "https://lista.mercadolivre.com.br/gel-carboidrato_NoIndex_True",
-    },
+    
     {
         "nome": "Super Queimas & Liquidação",
         "url": "https://www.mercadolivre.com.br/ofertas",
@@ -51,6 +48,15 @@ NICHOS_ESTRATEGICOS = [
     {
         "nome": "Beleza & Cuidados",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1246",
+    },
+    {
+        # Reaproveita a categoria "Corrida & Esportes" (MLB1276), que já
+        # funciona, e adiciona um filtro de busca por texto (&q=...) em
+        # cima dela, em vez de usar lista.mercadolivre.com.br (que não
+        # retorna cards pro scraper atual, provavelmente por carregar
+        # os produtos via JavaScript).
+        "nome": "Carbogel para Corredores",
+        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1276&q=gel+carboidrato",
     },
 ]
 
@@ -176,7 +182,7 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
     if not titulo or not url_produto or preco_atual is None:
         return None
 
-    # Teto de preço para foco em giro rápido de afiliados (evita itens de R$ 5.000+)
+    # Teto de preço inteligente para evitar produtos fora do perfil de compras rápidas
     if preco_atual > 900.0:
         return None
 
@@ -195,10 +201,25 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
     }
 
 
+def _montar_url_paginada(base_url: str, pagina: int) -> str:
+    """Monta a URL correta dependendo se é página de /ofertas ou busca em lista.mercadolivre."""
+    # Remove qualquer âncora/hash residual
+    url_base_limpa = base_url.split("#")[0]
+
+    if pagina <= 1:
+        return url_base_limpa
+
+    if "lista.mercadolivre.com.br" in url_base_limpa:
+        desde = ((pagina - 1) * 48) + 1
+        return f"{url_base_limpa}_Desde_{desde}"
+    else:
+        divisor = "&" if "?" in url_base_limpa else "?"
+        return f"{url_base_limpa}{divisor}page={pagina}"
+
+
 def buscar_ofertas(
     url_categoria: Optional[str] = None, max_paginas: Optional[int] = None
 ) -> List[Dict]:
-    # Por padrão analisa até 3 páginas para nunca esgotar produtos inéditos
     paginas_para_buscar = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 3)
     promocoes: List[Dict] = []
 
@@ -212,21 +233,42 @@ def buscar_ofertas(
             categoria_nome = nicho["nome"]
             break
 
-    # Alterna dinamicamente a página inicial (1 ou 2) para evitar minerar sempre a mesma ordem
-    pagina_inicial = random.choice([1, 2])
+    # Para buscas com volume menor (ex: lista), sempre começa da página 1
+    # Para vitrines com grande volume (/ofertas), pode alternar entre 1 e 2
+    if "lista.mercadolivre.com.br" in base_url:
+        pagina_inicial = 1
+    else:
+        pagina_inicial = random.choice([1, 2])
+
     pagina_final = pagina_inicial + paginas_para_buscar
 
     for pagina in range(pagina_inicial, pagina_final):
-        if pagina > 1:
-            divisor = "&" if "?" in base_url else "?"
-            url = f"{base_url}{divisor}page={pagina}"
-        else:
-            url = base_url
+        url = _montar_url_paginada(base_url, pagina)
+        logger.info("Buscando ofertas: %s (Página %d) -> %s", categoria_nome, pagina, url)
 
-        logger.info("Buscando ofertas: %s (Página %d)", categoria_nome, pagina)
         html = _buscar_pagina_html(url)
         if not html:
             break
+
+        # --- DEBUG TEMPORÁRIO ---
+        # Salva o HTML bruto recebido na primeira página de cada nicho,
+        # só pra podermos inspecionar o que o Mercado Livre realmente
+        # devolveu (ex: página de produtos com outras classes CSS,
+        # tela de carregamento via JS, bloqueio/captcha, etc).
+        # Remova este bloco depois de diagnosticar o problema.
+        if pagina == pagina_inicial:
+            nome_arquivo_debug = f"debug_{categoria_nome.replace(' ', '_').replace('&', 'e')}.html"
+            try:
+                with open(nome_arquivo_debug, "w", encoding="utf-8") as f:
+                    f.write(html)
+                logger.info(
+                    "[DEBUG] HTML salvo em '%s' (%d caracteres)",
+                    nome_arquivo_debug,
+                    len(html),
+                )
+            except OSError as erro:
+                logger.warning("[DEBUG] Não foi possível salvar o HTML: %s", erro)
+        # --- FIM DEBUG TEMPORÁRIO ---
 
         soup = BeautifulSoup(html, "html.parser")
 
