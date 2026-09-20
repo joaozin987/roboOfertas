@@ -1,7 +1,7 @@
 """
 Orquestrador principal do bot de promoções.
-Coordena a busca de ofertas por nicho cíclico (Mercado Livre),
-filtragem com limites independentes, validação no banco e envio ao Telegram e WhatsApp.
+Coordena a busca de ofertas por nicho cíclico (Mercado Livre e Shopee),
+filtragem com deduplicação antecipada no banco e envio ao Telegram e WhatsApp.
 """
 
 import logging
@@ -9,6 +9,7 @@ import time
 from typing import List, Dict
 
 from app import config, database, mercado_livre, promocoes, telegram, whatsapp
+from app import shopee
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +19,12 @@ def enviar_mensagem_teste() -> bool:
     logger.info("Enviando mensagem de teste para os canais...")
 
     mensagem = (
-        "🤖 *Jpz Ofertas Bot conectado com sucesso!*\n\n"
+        "🤖 *Bot de Promoções conectado com sucesso!*\n\n"
         "Configurações ativas:\n"
         f"• ML Desconto Mínimo: {getattr(config, 'MELI_MIN_DESCONTO', getattr(config, 'DESCONTO_MINIMO', 70))}%\n"
-        f"• ML Max Envios por ciclo: {getattr(config, 'MELI_MAX_ENVIOS', 5)}\n"
+        f"• ML Max Envios: {getattr(config, 'MELI_MAX_ENVIOS', 5)}\n"
+        f"• Shopee Desconto Mínimo: {getattr(config, 'SHOPEE_MIN_DESCONTO', 70)}%\n"
+        f"• Shopee Max Envios: {getattr(config, 'SHOPEE_MAX_ENVIOS', 5)}\n"
         f"• Intervalo de ciclo: {getattr(config, 'CHECK_INTERVAL_MINUTES', 5)} min"
     )
 
@@ -75,7 +78,7 @@ def _publicar_no_whatsapp(texto_mensagem: str, imagem_url: str = None) -> bool:
 
 
 def _processar_e_publicar_oferta(promo: dict, delay_segundos: int) -> bool:
-    """Valida duplicidade, assegura o link de afiliado comissionado e dispara nos canais ativos."""
+    """Valida ID, gera link de afiliado se necessário e dispara nos canais ativos."""
     url_produto = promo.get("url_produto", "").strip()
     produto_id = promo.get("produto_id") or database.extrair_produto_id(url_produto)
 
@@ -85,30 +88,22 @@ def _processar_e_publicar_oferta(promo: dict, delay_segundos: int) -> bool:
 
     promo["produto_id"] = str(produto_id)
 
+    # Verificação defensiva de banco de dados
     if database.produto_ja_publicado(promo["produto_id"]):
         logger.info("⏩ Produto %s já publicado anteriormente. Ignorando...", promo["produto_id"])
         return False
 
-    # Gera link de afiliado Mercado Livre obrigatório
-    if not promo.get("url_afiliado"):
+    # Gera link de afiliado Mercado Livre se ainda não tiver
+    if promo.get("origem") != "Shopee" and not promo.get("url_afiliado"):
         logger.info("🔗 Gerando link de afiliado Mercado Livre para %s...", promo["produto_id"])
         link_afiliado = mercado_livre.montar_link_afiliado(url_produto)
-        
-        # Trava de segurança: Se o cookie expirou e não gerou comissão, NÃO posta!
-        if not link_afiliado:
-            logger.error(
-                "❌ [BLOQUEIO DE SEGURANÇA] Item %s ignorado porque o link comissionado falhou (Cookie expirado?).",
-                promo["produto_id"]
-            )
-            return False
-            
         promo["url_afiliado"] = link_afiliado
 
     texto_mensagem = promocoes.montar_mensagem(promo)
     imagem_url = promo.get("imagem")
 
     if getattr(config, "TEST_MODE", False):
-        logger.info("[TEST_MODE] Promoção validada (ID %s):\n%s\n", promo["produto_id"], texto_mensagem)
+        logger.info("[TEST_MODE] Promoção aprovada (ID %s):\n%s\n", promo["produto_id"], texto_mensagem)
         return True
 
     logger.info(
@@ -121,7 +116,7 @@ def _processar_e_publicar_oferta(promo: dict, delay_segundos: int) -> bool:
     # Disparo no Telegram
     sucesso_tg = _publicar_no_telegram(texto_mensagem, imagem_url)
 
-    # Respiro de 2 segundos entre as duas APIs
+    # Respiro de 2 segundos entre as duas chamadas de API
     time.sleep(2)
 
     # Disparo no WhatsApp
@@ -133,8 +128,21 @@ def _processar_e_publicar_oferta(promo: dict, delay_segundos: int) -> bool:
         time.sleep(delay_segundos)
         return True
     else:
-        logger.warning("❌ Falha ao publicar %s nos canais. Não salvo no banco.", promo["produto_id"])
+        logger.warning("❌ Falha ao publicar %s em todos os canais. Não salvo no banco.", promo["produto_id"])
         return False
+
+
+def _filtrar_apenas_ineditas(lista_ofertas: List[Dict]) -> List[Dict]:
+    """Descarta ofertas que já existem no banco antes da montagem final da fila."""
+    ineditas = []
+    for promo in lista_ofertas:
+        url = promo.get("url_produto", "").strip()
+        pid = promo.get("produto_id") or database.extrair_produto_id(url)
+        if pid:
+            promo["produto_id"] = str(pid)
+            if not database.produto_ja_publicado(promo["produto_id"]):
+                ineditas.append(promo)
+    return ineditas
 
 
 def executar_ciclo(nicho: dict = None) -> int:
@@ -146,20 +154,51 @@ def executar_ciclo(nicho: dict = None) -> int:
 
     logger.info("=== Iniciando ciclo de busca: Nicho [%s] ===", nome_nicho)
 
+    # 1. Busca e filtragem do Mercado Livre
     ofertas_meli_brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
     ofertas_meli_aprovadas = promocoes.preparar_promocoes_para_publicar(ofertas_meli_brutas)
-
+    
     min_desc_meli = getattr(config, "MELI_MIN_DESCONTO", getattr(config, "DESCONTO_MINIMO", 70.0))
     ofertas_meli_filtradas = [
         p for p in ofertas_meli_aprovadas if (p.get("desconto") or 0) >= min_desc_meli
     ]
+
+    # FILTRAGEM PRÉVIA NO BANCO (Garante que a fila contenha apenas itens inéditos)
+    ofertas_meli_ineditas = _filtrar_apenas_ineditas(ofertas_meli_filtradas)
     max_envios_meli = getattr(config, "MELI_MAX_ENVIOS", 5)
 
-    fila_publicacao: List[Dict] = ofertas_meli_filtradas[:max_envios_meli]
+    # 2. Busca e filtragem da Shopee
+    min_desc_shopee = getattr(config, "SHOPEE_MIN_DESCONTO", 70.0)
+    ofertas_shopee_brutas = []
+    if hasattr(shopee, "buscar_ofertas_shopee"):
+        try:
+            ofertas_shopee_brutas = shopee.buscar_ofertas_shopee(limite_minimo_desconto=min_desc_shopee) or []
+        except Exception as err_shopee:
+            logger.error("Falha ao buscar ofertas Shopee: %s", err_shopee)
+
+    ofertas_shopee_ineditas = _filtrar_apenas_ineditas(ofertas_shopee_brutas)
+    max_envios_shopee = getattr(config, "SHOPEE_MAX_ENVIOS", 5)
+
+    # 3. Intercala as ofertas inéditas reais (1 ML, 1 Shopee...)
+    fila_publicacao: List[Dict] = []
+    max_iter = max(len(ofertas_meli_ineditas), len(ofertas_shopee_ineditas))
+
+    cont_ml = 0
+    cont_shopee = 0
+
+    for i in range(max_iter):
+        if i < len(ofertas_meli_ineditas) and cont_ml < max_envios_meli:
+            fila_publicacao.append(ofertas_meli_ineditas[i])
+            cont_ml += 1
+        if i < len(ofertas_shopee_ineditas) and cont_shopee < max_envios_shopee:
+            fila_publicacao.append(ofertas_shopee_ineditas[i])
+            cont_shopee += 1
 
     logger.info(
-        "Fila montada para [%s]: %d ofertas prontas para processamento.",
+        "Fila de inéditos para [%s]: %d ML + %d Shopee = %d ofertas prontas para disparo.",
         nome_nicho,
+        cont_ml,
+        cont_shopee,
         len(fila_publicacao)
     )
 
