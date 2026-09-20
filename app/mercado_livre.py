@@ -1,9 +1,10 @@
 """
 Camada de comunicação com o Mercado Livre.
-Faz o scraping da página pública de ofertas com rotação por categorias oficiais.
+Faz o scraping da página pública de ofertas com rotação por categorias oficiais e paginação dinâmica.
 """
 
 import logging
+import random
 import re
 import time
 from typing import Optional, List, Dict
@@ -17,8 +18,12 @@ from app.afiliados import gerar_link_afiliado
 
 logger = logging.getLogger(__name__)
 
-# Categorias oficiais e nichos estratégicos com rotação balanceada
+# Categorias oficiais e nichos estratégicos com alta conversão e rotação balanceada
 NICHOS_ESTRATEGICOS = [
+    {
+        "nome": "Super Queimas & Liquidação",
+        "url": "https://www.mercadolivre.com.br/ofertas",
+    },
     {
         "nome": "Smartphones & Celulares",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051",
@@ -44,13 +49,6 @@ NICHOS_ESTRATEGICOS = [
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1246",
     },
 ]
-
-# Nichos cuja trava de segurança exige que o título contenha a marca exata
-_MARCAS_ESTRITAS = {"Rare Beauty", "Aura Beauty"}
-
-# Nichos que apontam para página de loja (/loja/...), que não pagina via ?page=N
-# como a página de /ofertas — então não adianta tentar páginas extras.
-_NICHOS_PAGINA_UNICA = {"Aura Beauty"}
 
 _SELETORES = {
     "card": [
@@ -148,7 +146,7 @@ def _buscar_pagina_html(url: str) -> Optional[str]:
         "User-Agent": getattr(
             config,
             "SCRAPER_USER_AGENT",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         )
     }
     try:
@@ -174,9 +172,8 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
     if not titulo or not url_produto or preco_atual is None:
         return None
 
-    # Trava de segurança: garante que itens de nichos de marca específica
-    # (ex: Rare Beauty, Aura Beauty) sejam estritamente da marca anunciada
-    if categoria_nome in _MARCAS_ESTRITAS and categoria_nome.lower() not in titulo.lower():
+    # Teto de preço para foco em giro rápido de afiliados (evita itens de R$ 5.000+)
+    if preco_atual > 900.0:
         return None
 
     desconto = calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None
@@ -197,10 +194,13 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
 def buscar_ofertas(
     url_categoria: Optional[str] = None, max_paginas: Optional[int] = None
 ) -> List[Dict]:
-    max_paginas = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 1)
+    # Por padrão analisa até 3 páginas para nunca esgotar produtos inéditos
+    paginas_para_buscar = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 3)
     promocoes: List[Dict] = []
 
-    base_url = url_categoria or getattr(config, "MERCADO_LIVRE_OFERTAS_URL", "https://www.mercadolivre.com.br/ofertas")
+    base_url = url_categoria or getattr(
+        config, "MERCADO_LIVRE_OFERTAS_URL", "https://www.mercadolivre.com.br/ofertas"
+    )
 
     categoria_nome = "Ofertas"
     for nicho in NICHOS_ESTRATEGICOS:
@@ -208,17 +208,18 @@ def buscar_ofertas(
             categoria_nome = nicho["nome"]
             break
 
-    if categoria_nome in _NICHOS_PAGINA_UNICA:
-        max_paginas = 1
+    # Alterna dinamicamente a página inicial (1 ou 2) para evitar minerar sempre a mesma ordem
+    pagina_inicial = random.choice([1, 2])
+    pagina_final = pagina_inicial + paginas_para_buscar
 
-    for pagina in range(1, max_paginas + 1):
+    for pagina in range(pagina_inicial, pagina_final):
         if pagina > 1:
             divisor = "&" if "?" in base_url else "?"
             url = f"{base_url}{divisor}page={pagina}"
         else:
             url = base_url
 
-        logger.info("Buscando ofertas da URL: %s", url)
+        logger.info("Buscando ofertas: %s (Página %d)", categoria_nome, pagina)
         html = _buscar_pagina_html(url)
         if not html:
             break
@@ -240,8 +241,7 @@ def buscar_ofertas(
             if promocao:
                 promocoes.append(promocao)
 
-        if pagina < max_paginas:
-            time.sleep(getattr(config, "SCRAPER_REQUEST_DELAY_SECONDS", 2))
+        time.sleep(getattr(config, "SCRAPER_REQUEST_DELAY_SECONDS", 2))
 
-    logger.info("%d produtos encontrados para [%s]", len(promocoes), categoria_nome)
+    logger.info("%d produtos válidos minerados para [%s]", len(promocoes), categoria_nome)
     return promocoes
