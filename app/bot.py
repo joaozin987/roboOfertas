@@ -152,13 +152,30 @@ def executar_ciclo(nicho: dict = None) -> int:
 
     # 1. Mercado Livre
     ofertas_meli_brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
-    ofertas_meli_aprovadas = promocoes.preparar_promocoes_para_publicar(ofertas_meli_brutas)
+
+    # 🔧 CORREÇÃO: remove os produtos já publicados ANTES do ranking/corte de top N.
+    # Assim o corte por pontuação (feito dentro de preparar_promocoes_para_publicar)
+    # é aplicado só sobre ofertas que ainda não foram enviadas, evitando que o
+    # mesmo "top 10" de sempre esgote a fila e zere os envios quando essas
+    # ofertas já tiverem sido publicadas em ciclos anteriores.
+    ofertas_meli_brutas_ineditas = _filtrar_apenas_ineditas(ofertas_meli_brutas)
+
+    logger.info(
+        "Pré-filtro de duplicados [%s]: %d brutas -> %d inéditas antes do ranking.",
+        nome_nicho,
+        len(ofertas_meli_brutas),
+        len(ofertas_meli_brutas_ineditas),
+    )
+
+    ofertas_meli_aprovadas = promocoes.preparar_promocoes_para_publicar(ofertas_meli_brutas_ineditas)
 
     min_desc_meli = getattr(config, "MELI_MIN_DESCONTO", getattr(config, "DESCONTO_MINIMO", 70.0))
     ofertas_meli_filtradas = [
         p for p in ofertas_meli_aprovadas if (p.get("desconto") or 0) >= min_desc_meli
     ]
 
+    # Mantém essa segunda checagem como rede de segurança (idempotente, não deve
+    # descartar quase nada agora que o pré-filtro já rodou antes do ranking).
     ofertas_meli_ineditas = _filtrar_apenas_ineditas(ofertas_meli_filtradas)
     max_envios_meli = getattr(config, "MELI_MAX_ENVIOS", 5)
 
