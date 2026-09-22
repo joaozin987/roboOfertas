@@ -49,15 +49,6 @@ NICHOS_ESTRATEGICOS = [
         "nome": "Beleza & Cuidados",
         "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1246",
     },
-    {
-        # Reaproveita a categoria "Corrida & Esportes" (MLB1276), que já
-        # funciona, e adiciona um filtro de busca por texto (&q=...) em
-        # cima dela, em vez de usar lista.mercadolivre.com.br (que não
-        # retorna cards pro scraper atual, provavelmente por carregar
-        # os produtos via JavaScript).
-        "nome": "Carbogel para Corredores",
-        "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1276&q=gel+carboidrato",
-    },
 ]
 
 _SELETORES = {
