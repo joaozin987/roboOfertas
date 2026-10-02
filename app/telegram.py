@@ -6,6 +6,7 @@ da API oficial do Telegram Bot. Não deve conter regras de negócio sobre
 promoções — isso fica em `promocoes.py`.
 """
 
+import html
 import logging
 
 import requests
@@ -64,7 +65,7 @@ def enviar_mensagem(texto: str, parse_mode: str | None = None) -> bool:
         return False
 
 
-def enviar_foto(url_imagem: str, legenda: str) -> bool:
+def enviar_foto(url_imagem: str, legenda: str, parse_mode: str | None = None) -> bool:
     """
     Envia uma foto com legenda para o canal do Telegram configurado.
     Usado quando a promoção tem uma imagem do produto.
@@ -86,6 +87,8 @@ def enviar_foto(url_imagem: str, legenda: str) -> bool:
         "photo": url_imagem,
         "caption": legenda,
     }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
 
     try:
         resposta = requests.post(_url("sendPhoto"), data=payload, timeout=15)
@@ -99,6 +102,60 @@ def enviar_foto(url_imagem: str, legenda: str) -> bool:
     except requests.RequestException as erro:
         logger.error("Falha ao enviar foto para Telegram: %s", erro)
         return False
+
+
+def _montar_texto_com_link_oculto(texto: str, url: str, rotulo: str = "🛒 Ver oferta") -> str:
+    """
+    Recebe o texto da mensagem já pronto (contendo a URL crua em algum
+    ponto) e devolve uma versão em HTML onde essa URL vira um link
+    clicável com o texto `rotulo`, escapando o restante do conteúdo
+    para não quebrar o parser do Telegram.
+
+    Se a URL não for encontrada no texto (ex.: já foi removida antes),
+    o link é apenas acrescentado ao final.
+    """
+    if url and url in texto:
+        antes, depois = texto.split(url, 1)
+        return f"{html.escape(antes)}<a href=\"{html.escape(url, quote=True)}\">{rotulo}</a>{html.escape(depois)}"
+
+    escapado = html.escape(texto)
+    if url:
+        escapado += f"\n\n<a href=\"{html.escape(url, quote=True)}\">{rotulo}</a>"
+    return escapado
+
+
+def publicar_com_link_oculto(
+    texto: str, url_afiliado: str, url_imagem: str | None = None, rotulo: str = "🛒 Ver oferta"
+) -> bool:
+    """
+    Publica a promoção no canal com a URL de afiliado escondida atrás
+    de um texto clicável (ex.: "🛒 Ver oferta"), usando parse_mode HTML.
+
+    `texto` deve ser a mensagem já montada por `promocoes.montar_mensagem`,
+    contendo a URL crua em algum ponto (normalmente no fim). `url_afiliado`
+    é essa mesma URL, passada separadamente para localizá-la no texto.
+
+    Se o envio em HTML falhar por qualquer motivo (ex.: caractere que
+    o parser não aceitou), cai automaticamente para o texto simples,
+    com o link visível por extenso, para não perder a publicação.
+    """
+    texto_html = _montar_texto_com_link_oculto(texto, url_afiliado, rotulo)
+
+    if url_imagem:
+        sucesso = enviar_foto(url_imagem, texto_html, parse_mode="HTML")
+        if sucesso:
+            return True
+        logger.warning("Falha ao enviar foto com link oculto — tentando texto simples.")
+
+    sucesso = enviar_mensagem(texto_html, parse_mode="HTML")
+    if sucesso:
+        return True
+
+    logger.warning("Falha ao enviar em HTML — tentando texto simples sem link oculto.")
+    if url_imagem:
+        if enviar_foto(url_imagem, texto):
+            return True
+    return enviar_mensagem(texto)
 
 
 def publicar_promocao(mensagem: str, url_imagem: str | None = None) -> bool:
