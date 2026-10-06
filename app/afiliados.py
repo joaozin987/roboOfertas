@@ -1,13 +1,34 @@
+"""
+Geração de links de afiliado do Mercado Livre via API interna do linkbuilder.
+
+IMPORTANTE: usa a sessão do seu navegador (CSRF + cookie). Ela EXPIRA. Quando
+isso acontece, `gerar_link_afiliado` devolve None e `sessao_expirada()` fica True.
+O cookie é credencial da sua conta: nunca imprima nem versione.
+"""
+
+import logging
 import os
-import requests
+import time
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
+
+import requests
+
 from app import config
+
+logger = logging.getLogger(__name__)
 
 API_URL = "https://www.mercadolivre.com.br/affiliate-program/api/v2/affiliates/createLink"
 
+_sessao_expirada = False
 
-def _obter_config(chave: str, padrao: str = "") -> str:
+
+def sessao_expirada() -> bool:
+    """True se a última chamada indicou cookie/CSRF vencido."""
+    return _sessao_expirada
+
+
+def _cfg(chave: str, padrao: str = "") -> str:
     return getattr(config, chave, None) or os.getenv(chave, padrao)
 
 
@@ -15,25 +36,30 @@ def limpar_url(url: str) -> str:
     """Remove parâmetros e âncoras (#reviews, etc.) para evitar rejeição da API."""
     if not url:
         return url
-    parsed = urlparse(url)
-    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+    p = urlparse(url)
+    return urlunparse((p.scheme, p.netloc, p.path, "", "", ""))
 
 
-def gerar_link_afiliado(url_produto: str, usar_link_curto: bool = True) -> str:
+def gerar_link_afiliado(url_produto: str, usar_link_curto: bool = True) -> Optional[str]:
     """
-    Gera o link oficial de afiliado do Mercado Livre chamando a API interna.
-    Retorna o short_url (https://meli.la/...) ou long_url (/social/...).
-    Se houver falha, retorna a URL original.
+    Retorna o link de afiliado ou None em qualquer falha.
+    NUNCA devolve a URL original: quem chama decide o que fazer sem o link.
     """
-    affiliate_tag = _obter_config("MELI_AFFILIATE_TAG", "dosjoao20220906213738")
-    csrf_token = _obter_config("MELI_CSRF_TOKEN", "")
-    cookie_header = _obter_config("MELI_COOKIE_HEADER", "")
+    global _sessao_expirada
 
-    if not csrf_token or not cookie_header:
-        print("[AVISO AFILIADOS] CSRF_TOKEN ou COOKIE_HEADER não configurados.")
-        return url_produto
+    tag = _cfg("MELI_AFFILIATE_TAG")
+    csrf = _cfg("MELI_CSRF_TOKEN")
+    cookie = _cfg("MELI_COOKIE_HEADER")
+
+    if not (tag and csrf and cookie):
+        logger.error(
+            "Afiliado ML não configurado (MELI_AFFILIATE_TAG, MELI_CSRF_TOKEN, MELI_COOKIE_HEADER)."
+        )
+        return None
 
     url_limpa = limpar_url(url_produto)
+    if not url_limpa:
+        return None
 
     headers = {
         "accept": "application/json, text/plain, */*",
@@ -41,47 +67,67 @@ def gerar_link_afiliado(url_produto: str, usar_link_curto: bool = True) -> str:
         "content-type": "application/json",
         "origin": "https://www.mercadolivre.com.br",
         "referer": "https://www.mercadolivre.com.br/afiliados/linkbuilder",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "x-csrf-token": csrf_token,
-        "cookie": cookie_header,
+        "user-agent": getattr(config, "SCRAPER_USER_AGENT", "Mozilla/5.0"),
+        "x-csrf-token": csrf,
+        "cookie": cookie,
     }
+    payload = {"urls": [url_limpa], "tag": tag}
 
-    payload = {
-        "urls": [url_limpa],
-        "tag": affiliate_tag,
-    }
+    for tentativa in range(1, 3):
+        try:
+            resp = requests.post(API_URL, json=payload, headers=headers, timeout=10)
+        except requests.RequestException as erro:
+            logger.warning(
+                "Afiliado ML: erro de rede (%s), tentativa %d/2", type(erro).__name__, tentativa
+            )
+            time.sleep(2)
+            continue
 
-    try:
-        response = requests.post(API_URL, json=payload, headers=headers, timeout=10)
+        if resp.status_code in (401, 403):
+            if not _sessao_expirada:
+                logger.critical(
+                    "Afiliado ML: sessão expirada (HTTP %d). "
+                    "Renove MELI_CSRF_TOKEN e MELI_COOKIE_HEADER no .env.",
+                    resp.status_code,
+                )
+            _sessao_expirada = True
+            return None
 
-        if response.status_code in (200, 201):
-            data = response.json()
-            urls = data.get("urls", [])
-            if urls and isinstance(urls, list) and len(urls) > 0:
+        if resp.status_code == 429 or resp.status_code >= 500:
+            logger.warning("Afiliado ML: HTTP %d, tentativa %d/2", resp.status_code, tentativa)
+            time.sleep(3)
+            continue
+
+        if resp.status_code in (200, 201):
+            try:
+                urls = resp.json().get("urls") or []
+            except ValueError:
+                urls = []
+            if urls:
                 item = urls[0]
-                if usar_link_curto:
-                    link = item.get("short_url") or item.get("long_url")
-                else:
-                    link = item.get("long_url") or item.get("short_url")
-
-                if link:
+                curto, longo = item.get("short_url"), item.get("long_url")
+                link = (curto or longo) if usar_link_curto else (longo or curto)
+                if link and link != url_limpa:
+                    _sessao_expirada = False
                     return link
 
-        print(f"[ERRO AFILIADOS] Status {response.status_code}: {response.text}")
-    except Exception as e:
-        print(f"[ERRO AFILIADOS] Exceção na requisição: {e}")
+        logger.error(
+            "Afiliado ML: resposta inesperada (HTTP %d): %s", resp.status_code, resp.text[:200]
+        )
+        return None
 
-    return url_produto
+    return None
 
 
 if __name__ == "__main__":
-    url = "https://www.mercadolivre.com.br/mesa-de-computador-escrivaninha-preta-pe-metalon-industrial-120x60-jm3-moveis/p/MLB29873777#reviews"
-
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    url_teste = (
+        "https://www.mercadolivre.com.br/mesa-de-computador-escrivaninha-preta-"
+        "pe-metalon-industrial-120x60-jm3-moveis/p/MLB29873777#reviews"
+    )
     print("--- TESTE DE GERAÇÃO DE LINK ---")
-    print(f"URL original:\n{url}\n")
-
-    print("Gerando link de afiliado...")
-    link = gerar_link_afiliado(url)
-
-    print("\nLINK GERADO:")
-    print(link)
+    link = gerar_link_afiliado(url_teste)
+    if link:
+        print("OK, LINK GERADO:", link)
+    else:
+        print("FALHOU: veja a mensagem de erro acima (sessão expirada, variável ausente ou resposta inesperada).")

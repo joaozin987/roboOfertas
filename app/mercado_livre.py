@@ -7,8 +7,8 @@ import logging
 import random
 import re
 import time
-from typing import Optional, List, Dict
-from urllib.parse import urlparse, urlunparse
+from typing import Dict, List, Optional
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
@@ -18,9 +18,10 @@ from app.afiliados import gerar_link_afiliado
 
 logger = logging.getLogger(__name__)
 
+BASE_URL = "https://www.mercadolivre.com.br"
+
 # Categorias oficiais, buscas e nichos estratégicos com alta conversão
 NICHOS_ESTRATEGICOS = [
-    
     {
         "nome": "Super Queimas & Liquidação",
         "url": "https://www.mercadolivre.com.br/ofertas",
@@ -90,6 +91,10 @@ _SELETORES = {
     ],
 }
 
+_SESSAO = requests.Session()
+
+
+# ------------------------------------------------------------------ helpers
 
 def _primeiro_texto(elemento, seletores) -> Optional[str]:
     for seletor in seletores:
@@ -110,14 +115,56 @@ def _primeiro_atributo(elemento, seletores, atributo) -> Optional[str]:
 
 
 def _parse_preco(texto: Optional[str]) -> Optional[float]:
+    """Lê 'R$ 1.299,90' / '59,90' / '59'. Usa o PRIMEIRO número do texto."""
     if not texto:
         return None
-    limpo = re.sub(r"[^\d,]", "", texto)
-    limpo = limpo.replace(".", "").replace(",", ".")
+    m = re.search(r"(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?", texto)
+    if not m:
+        return None
+    inteiro = m.group(1).replace(".", "")
+    centavos = (m.group(2) or "0").ljust(2, "0")
     try:
-        return float(limpo)
+        return float(f"{inteiro}.{centavos}")
     except ValueError:
         return None
+
+
+def _preco_do_elemento(elemento) -> Optional[float]:
+    """
+    Lê fração e centavos separadamente. O get_text() do bloco inteiro cola os
+    dois ('R$5990'), o que faria R$ 59,90 virar 5990.
+    """
+    fracao = elemento.select_one("span.andes-money-amount__fraction")
+    if fracao:
+        inteiro = re.sub(r"\D", "", fracao.get_text())
+        if inteiro:
+            cents = elemento.select_one("span.andes-money-amount__cents")
+            centavos = re.sub(r"\D", "", cents.get_text())[:2] if cents else ""
+            return float(f"{inteiro}.{(centavos or '0').ljust(2, '0')}")
+    return _parse_preco(elemento.get_text(" ", strip=True))
+
+
+def _primeiro_preco(card, seletores) -> Optional[float]:
+    for seletor in seletores:
+        elemento = card.select_one(seletor)
+        if elemento:
+            preco = _preco_do_elemento(elemento)
+            if preco is not None:
+                return preco
+    return None
+
+
+def _extrair_imagem(card) -> Optional[str]:
+    """O ML usa lazy-load: o src costuma ser um placeholder 'data:image/...'."""
+    for seletor in _SELETORES["imagem"]:
+        elemento = card.select_one(seletor)
+        if not elemento:
+            continue
+        for atributo in ("data-src", "src", "data-lazy"):
+            valor = elemento.get(atributo)
+            if valor and not valor.startswith("data:"):
+                return "https:" + valor if valor.startswith("//") else valor
+    return None
 
 
 def calcular_desconto(preco_atual: float, preco_anterior: float) -> Optional[float]:
@@ -127,66 +174,73 @@ def calcular_desconto(preco_atual: float, preco_anterior: float) -> Optional[flo
     return round(desconto, 1)
 
 
-def limpar_url_produto(url: str) -> str:
-    if not url:
-        return url
-    parsed = urlparse(url)
-    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
-
-
-def montar_link_afiliado(url_produto: str) -> str:
+def montar_link_afiliado(url_produto: str) -> Optional[str]:
+    """Link de afiliado ou None. Nunca devolve o link cru (sem comissão)."""
     if not url_produto:
-        return url_produto
-    url_limpa = limpar_url_produto(url_produto)
-    link_oficial = gerar_link_afiliado(url_limpa)
-    return link_oficial or url_produto
-
-
-def _buscar_pagina_html(url: str) -> Optional[str]:
-    headers = {
-        "User-Agent": getattr(
-            config,
-            "SCRAPER_USER_AGENT",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        )
-    }
-    try:
-        resposta = requests.get(url, headers=headers, timeout=15)
-        resposta.raise_for_status()
-        return resposta.text
-    except requests.RequestException as erro:
-        logger.error("Falha ao consultar URL '%s': %s", url, erro)
         return None
+    return gerar_link_afiliado(url_produto)  # a limpeza da URL é feita lá
 
+
+# --------------------------------------------------------------------- rede
+
+def _buscar_pagina_html(url: str, tentativas: int = 3) -> Optional[str]:
+    headers = {
+        "User-Agent": getattr(config, "SCRAPER_USER_AGENT", "Mozilla/5.0"),
+        "Accept-Language": "pt-BR,pt;q=0.9",
+    }
+    for tentativa in range(1, tentativas + 1):
+        try:
+            resposta = _SESSAO.get(url, headers=headers, timeout=15)
+        except requests.RequestException as erro:
+            logger.warning(
+                "Falha de rede em '%s' (%s), tentativa %d/%d",
+                url, type(erro).__name__, tentativa, tentativas,
+            )
+        else:
+            if resposta.status_code == 200:
+                return resposta.text
+            if resposta.status_code in (429, 500, 502, 503, 504):
+                logger.warning(
+                    "HTTP %d em '%s', tentativa %d/%d",
+                    resposta.status_code, url, tentativa, tentativas,
+                )
+            else:
+                logger.error("HTTP %d em '%s'", resposta.status_code, url)
+                return None
+        time.sleep(2 * tentativa + random.random())
+    return None
+
+
+# -------------------------------------------------------------- extração
 
 def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]:
     titulo = _primeiro_texto(card, _SELETORES["titulo"])
     url_produto = _primeiro_atributo(card, _SELETORES["link"], "href")
-    imagem = (
-        _primeiro_atributo(card, _SELETORES["imagem"], "src")
-        or _primeiro_atributo(card, _SELETORES["imagem"], "data-src")
-    )
-
-    preco_atual = _parse_preco(_primeiro_texto(card, _SELETORES["preco_atual"]))
-    preco_anterior = _parse_preco(_primeiro_texto(card, _SELETORES["preco_anterior"]))
+    preco_atual = _primeiro_preco(card, _SELETORES["preco_atual"])
+    preco_anterior = _primeiro_preco(card, _SELETORES["preco_anterior"])
 
     if not titulo or not url_produto or preco_atual is None:
         return None
 
-    # Teto de preço inteligente para evitar produtos fora do perfil de compras rápidas
-    if preco_atual > 900.0:
+    # Teto de preço para evitar produtos fora do perfil de compras rápidas
+    if preco_atual > getattr(config, "ML_PRECO_MAXIMO", 900.0):
         return None
+
+    # Preço "de" que não é maior que o atual é leitura errada (ex.: parcela), não desconto
+    if preco_anterior is not None and preco_anterior <= preco_atual:
+        preco_anterior = None
 
     desconto = calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None
 
     return {
+        "origem": "mercado_livre",
         "titulo": titulo,
         "categoria": categoria_nome,
         "preco_atual": preco_atual,
         "preco_anterior": preco_anterior,
         "desconto": desconto,
-        "imagem": imagem,
-        "url_produto": url_produto,
+        "imagem": _extrair_imagem(card),
+        "url_produto": urljoin(BASE_URL, url_produto),
         "url_afiliado": None,
         "cupom": getattr(config, "CUPOM_DESCONTO", None),
     }
@@ -194,7 +248,6 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
 
 def _montar_url_paginada(base_url: str, pagina: int) -> str:
     """Monta a URL correta dependendo se é página de /ofertas ou busca em lista.mercadolivre."""
-    # Remove qualquer âncora/hash residual
     url_base_limpa = base_url.split("#")[0]
 
     if pagina <= 1:
@@ -203,9 +256,19 @@ def _montar_url_paginada(base_url: str, pagina: int) -> str:
     if "lista.mercadolivre.com.br" in url_base_limpa:
         desde = ((pagina - 1) * 48) + 1
         return f"{url_base_limpa}_Desde_{desde}"
-    else:
-        divisor = "&" if "?" in url_base_limpa else "?"
-        return f"{url_base_limpa}{divisor}page={pagina}"
+
+    divisor = "&" if "?" in url_base_limpa else "?"
+    return f"{url_base_limpa}{divisor}page={pagina}"
+
+
+def _salvar_html_debug(categoria_nome: str, html: str) -> None:
+    nome = f"debug_{categoria_nome.replace(' ', '_').replace('&', 'e')}.html"
+    try:
+        with open(nome, "w", encoding="utf-8") as arquivo:
+            arquivo.write(html)
+        logger.info("[DEBUG] HTML salvo em '%s' (%d caracteres)", nome, len(html))
+    except OSError as erro:
+        logger.warning("[DEBUG] Não foi possível salvar o HTML: %s", erro)
 
 
 def buscar_ofertas(
@@ -215,7 +278,7 @@ def buscar_ofertas(
     promocoes: List[Dict] = []
 
     base_url = url_categoria or getattr(
-        config, "MERCADO_LIVRE_OFERTAS_URL", "https://www.mercadolivre.com.br/ofertas"
+        config, "MERCADO_LIVRE_OFERTAS_URL", f"{BASE_URL}/ofertas"
     )
 
     categoria_nome = "Ofertas"
@@ -224,16 +287,13 @@ def buscar_ofertas(
             categoria_nome = nicho["nome"]
             break
 
-    # Para buscas com volume menor (ex: lista), sempre começa da página 1
-    # Para vitrines com grande volume (/ofertas), pode alternar entre 1 e 2
+    # Buscas com volume menor (lista) começam na página 1; vitrines grandes alternam 1 e 2
     if "lista.mercadolivre.com.br" in base_url:
         pagina_inicial = 1
     else:
         pagina_inicial = random.choice([1, 2])
 
-    pagina_final = pagina_inicial + paginas_para_buscar
-
-    for pagina in range(pagina_inicial, pagina_final):
+    for pagina in range(pagina_inicial, pagina_inicial + paginas_para_buscar):
         url = _montar_url_paginada(base_url, pagina)
         logger.info("Buscando ofertas: %s (Página %d) -> %s", categoria_nome, pagina, url)
 
@@ -241,25 +301,8 @@ def buscar_ofertas(
         if not html:
             break
 
-        # --- DEBUG TEMPORÁRIO ---
-        # Salva o HTML bruto recebido na primeira página de cada nicho,
-        # só pra podermos inspecionar o que o Mercado Livre realmente
-        # devolveu (ex: página de produtos com outras classes CSS,
-        # tela de carregamento via JS, bloqueio/captcha, etc).
-        # Remova este bloco depois de diagnosticar o problema.
-        if pagina == pagina_inicial:
-            nome_arquivo_debug = f"debug_{categoria_nome.replace(' ', '_').replace('&', 'e')}.html"
-            try:
-                with open(nome_arquivo_debug, "w", encoding="utf-8") as f:
-                    f.write(html)
-                logger.info(
-                    "[DEBUG] HTML salvo em '%s' (%d caracteres)",
-                    nome_arquivo_debug,
-                    len(html),
-                )
-            except OSError as erro:
-                logger.warning("[DEBUG] Não foi possível salvar o HTML: %s", erro)
-        # --- FIM DEBUG TEMPORÁRIO ---
+        if getattr(config, "DEBUG_SALVAR_HTML", False) and pagina == pagina_inicial:
+            _salvar_html_debug(categoria_nome, html)
 
         soup = BeautifulSoup(html, "html.parser")
 
@@ -270,7 +313,14 @@ def buscar_ofertas(
                 break
 
         if not cards:
-            logger.warning("Nenhum card encontrado em %s", url)
+            if pagina == pagina_inicial:
+                logger.error(
+                    "Nenhum card em %s: os seletores podem estar desatualizados "
+                    "ou a página foi bloqueada. Ative DEBUG_SALVAR_HTML=true para inspecionar.",
+                    url,
+                )
+            else:
+                logger.warning("Nenhum card encontrado em %s", url)
             break
 
         for card in cards:
@@ -278,7 +328,9 @@ def buscar_ofertas(
             if promocao:
                 promocoes.append(promocao)
 
-        time.sleep(getattr(config, "SCRAPER_REQUEST_DELAY_SECONDS", 2))
+        time.sleep(
+            getattr(config, "SCRAPER_REQUEST_DELAY_SECONDS", 2) + random.random()
+        )
 
     logger.info("%d produtos válidos minerados para [%s]", len(promocoes), categoria_nome)
     return promocoes

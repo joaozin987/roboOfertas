@@ -1,21 +1,25 @@
 """
 Camada de persistência de dados.
-Compatível com MySQL (Railway) e SQLite (Desenvolvimento local).
+Compatível com MySQL (Railway) e SQLite (desenvolvimento local).
 """
 
 import logging
 import os
 import re
-from typing import Optional
-from urllib.parse import urlparse
+from typing import Iterable, Optional, Set
+from urllib.parse import unquote, urlparse
 
 from app import config
 
 logger = logging.getLogger(__name__)
 
+_inicializado = False
+
+# Marketplace + pelo menos 7 dígitos: evita confundir com IDs de categoria/promoção (MLB1430, etc.)
+_ID_RE = re.compile(r"(MLBU?)-?(\d{7,})")
+
 
 def _obter_database_url() -> Optional[str]:
-    """Busca a URL do banco em tempo de execução em todas as chaves possíveis."""
     return (
         os.getenv("MYSQL_URL")
         or os.getenv("MYSQLURL")
@@ -26,40 +30,69 @@ def _obter_database_url() -> Optional[str]:
 
 
 def _is_mysql() -> bool:
-    db_url = _obter_database_url()
-    return bool(db_url and ("mysql" in db_url.lower()))
+    url = _obter_database_url()
+    return bool(url) and urlparse(url).scheme.lower().startswith("mysql")
 
 
-def _get_connection():
-    db_url = _obter_database_url()
+def _placeholder() -> str:
+    return "%s" if _is_mysql() else "?"
 
+
+def _abrir_conexao():
     if _is_mysql():
         import pymysql
 
-        parsed = urlparse(db_url)
+        p = urlparse(_obter_database_url())
         return pymysql.connect(
-            host=parsed.hostname,
-            user=parsed.username,
-            password=parsed.password,
-            port=parsed.port or 3306,
-            database=parsed.path.lstrip("/"),
+            host=p.hostname,
+            user=unquote(p.username or ""),
+            password=unquote(p.password or ""),
+            port=p.port or 3306,
+            database=p.path.lstrip("/"),
             charset="utf8mb4",
             autocommit=True,
+            connect_timeout=10,
+            read_timeout=20,
+            write_timeout=20,
         )
-    else:
-        import sqlite3
 
-        caminho_banco = getattr(config, "DATABASE_PATH", "promocoes.db")
-        diretorio = os.path.dirname(caminho_banco)
-        if diretorio:
-            os.makedirs(diretorio, exist_ok=True)
-        return sqlite3.connect(caminho_banco)
+    import sqlite3
+
+    caminho = getattr(config, "DATABASE_PATH", "promocoes.db")
+    diretorio = os.path.dirname(caminho)
+    if diretorio:
+        os.makedirs(diretorio, exist_ok=True)
+    return sqlite3.connect(caminho)
+
+
+def _executar(sql: str, params: tuple = (), fetch: Optional[str] = None):
+    """Abre conexão, executa, devolve resultado e sempre fecha tudo."""
+    conn = _abrir_conexao()
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute(sql, params)
+            resultado = None
+            if fetch == "one":
+                resultado = cur.fetchone()
+            elif fetch == "all":
+                resultado = cur.fetchall()
+            conn.commit()
+            return resultado
+        finally:
+            cur.close()
+    finally:
+        conn.close()
 
 
 def inicializar_banco() -> None:
-    """Cria a tabela de promoções enviadas se ainda não existir."""
+    """Cria a tabela se não existir. Idempotente: só executa uma vez por processo."""
+    global _inicializado
+    if _inicializado:
+        return
+
     if _is_mysql():
-        logger.info("Inicializando conexão com o banco de dados: [MySQL (Produção)]")
+        logger.info("Banco de dados: [MySQL (Produção)]")
         ddl = """
         CREATE TABLE IF NOT EXISTS promocoes (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -75,10 +108,12 @@ def inicializar_banco() -> None:
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
     else:
-        logger.warning(
-            "Inicializando conexão com o banco de dados: [SQLite (Fallback Local)]. "
-            "Nenhuma URL MySQL válida encontrada em MYSQL_URL/DATABASE_URL."
-        )
+        if any(k.startswith("RAILWAY_") for k in os.environ):
+            raise RuntimeError(
+                "Rodando na Railway sem MYSQL_URL/DATABASE_URL válida. "
+                "SQLite seria apagado a cada deploy e o bot repostaria ofertas antigas."
+            )
+        logger.warning("Banco de dados: [SQLite (fallback local)]. Nenhuma URL MySQL encontrada.")
         ddl = """
         CREATE TABLE IF NOT EXISTS promocoes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,49 +129,53 @@ def inicializar_banco() -> None:
         );
         """
 
-    conn = _get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(ddl)
-        conn.commit()
-    finally:
-        cur.close()
-        conn.close()
+    _executar(ddl)
+    _inicializado = True
 
 
 def extrair_produto_id(url: str) -> Optional[str]:
-    """Extrai o ID canônico do Mercado Livre a partir da URL."""
+    """ID canônico do Mercado Livre (ex.: MLB29873777). Prioriza o caminho da URL."""
     if not url:
         return None
-    match = re.search(r"(MLB[U]?-?\d+)", url)
-    if match:
-        return match.group(1).replace("-", "")
+    caminho = unquote(urlparse(url).path)
+    for trecho in (caminho, unquote(url)):
+        m = _ID_RE.search(trecho)
+        if m:
+            return f"{m.group(1)}{m.group(2)}"
     return None
 
 
-def produto_ja_publicado(produto_id: str) -> bool:
-    """Verifica se o ID já foi salvo anteriormente."""
-    placeholder = "%s" if _is_mysql() else "?"
-    query = f"SELECT 1 FROM promocoes WHERE produto_id = {placeholder} LIMIT 1;"
+def ids_ja_publicados(ids: Iterable[str]) -> Set[str]:
+    """Consulta em lote: devolve o subconjunto de `ids` que já está no banco."""
+    unicos = list({str(i) for i in ids if i})
+    encontrados: Set[str] = set()
+    if not unicos:
+        return encontrados
+    ph = _placeholder()
+    for i in range(0, len(unicos), 500):  # abaixo do limite de variáveis do SQLite
+        lote = unicos[i : i + 500]
+        marcadores = ",".join([ph] * len(lote))
+        linhas = _executar(
+            f"SELECT produto_id FROM promocoes WHERE produto_id IN ({marcadores});",
+            tuple(lote),
+            fetch="all",
+        )
+        encontrados.update(str(l[0]) for l in linhas)
+    return encontrados
 
-    conn = _get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(query, (produto_id,))
-        resultado = cur.fetchone()
-        return resultado is not None
-    finally:
-        cur.close()
-        conn.close()
+
+def produto_ja_publicado(produto_id: str) -> bool:
+    return bool(ids_ja_publicados([produto_id]))
 
 
 def salvar_promocao(promo: dict) -> None:
-    """Persiste a promoção aprovada garantindo integridade de duplicados."""
+    """Persiste a promoção; duplicata é ignorada sem engolir outros erros."""
     if _is_mysql():
         sql = """
-        INSERT IGNORE INTO promocoes (
+        INSERT INTO promocoes (
             produto_id, titulo, categoria, preco_atual, preco_anterior, desconto, url_produto, url_afiliado
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE produto_id = produto_id;
         """
     else:
         sql = """
@@ -145,22 +184,16 @@ def salvar_promocao(promo: dict) -> None:
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
         """
 
-    valores = (
-        promo.get("produto_id"),
-        (promo.get("titulo") or "")[:500],
-        promo.get("categoria"),
-        promo.get("preco_atual"),
-        promo.get("preco_anterior"),
-        promo.get("desconto"),
-        promo.get("url_produto"),
-        promo.get("url_afiliado"),
+    _executar(
+        sql,
+        (
+            promo.get("produto_id"),
+            (promo.get("titulo") or "")[:500],
+            (promo.get("categoria") or "")[:100],
+            promo.get("preco_atual"),
+            promo.get("preco_anterior"),
+            promo.get("desconto"),
+            promo.get("url_produto"),
+            promo.get("url_afiliado"),
+        ),
     )
-
-    conn = _get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(sql, valores)
-        conn.commit()
-    finally:
-        cur.close()
-        conn.close()

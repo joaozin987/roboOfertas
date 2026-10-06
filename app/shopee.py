@@ -8,21 +8,32 @@ Arquivo lido: data/shopee_oferta.json (pode ter várias respostas coladas em seq
 
 import json
 import logging
+import time
 from pathlib import Path
-from typing import Optional, List, Dict
-from urllib.parse import urlparse, urlunparse, quote
+from typing import Dict, List, Optional
+from urllib.parse import quote, urlparse, urlunparse
 
 from app import config
 
 logger = logging.getLogger(__name__)
 
-ARQUIVO = Path(getattr(config, "SHOPEE_JSON_PATH", "data/shopee_oferta.json"))
 IMG_BASE = "https://down-br.img.susercontent.com/file/"
 
 # O bot rotaciona estes nichos; aqui existe só um, porque a lista vem do arquivo.
 NICHOS_ESTRATEGICOS = [
     {"nome": "Ofertas Shopee", "url": "arquivo"},
 ]
+
+
+def _caminho_arquivo() -> Path:
+    """Caminho relativo é resolvido a partir da raiz do projeto, não da pasta onde o bot foi iniciado."""
+    caminho = Path(getattr(config, "SHOPEE_JSON_PATH", "data/shopee_oferta.json"))
+    if not caminho.is_absolute():
+        caminho = Path(__file__).resolve().parent.parent / caminho
+    return caminho
+
+
+ARQUIVO = _caminho_arquivo()
 
 
 def _preco(valor) -> Optional[float]:
@@ -45,21 +56,44 @@ def limpar_url_produto(url: str) -> str:
     return urlunparse((p.scheme, p.netloc, p.path, "", "", ""))
 
 
-def montar_link_afiliado(url_produto: str) -> str:
-    """Reserva, usada só se a resposta vier sem long_link."""
+def montar_link_afiliado(url_produto: str) -> Optional[str]:
+    """Reserva, usada só se a resposta vier sem long_link. Sem IDs de afiliado => None."""
+    affiliate_id = getattr(config, "SHOPEE_AFFILIATE_ID", "")
+    sub_id = getattr(config, "SHOPEE_USER_ID", "")
+    if not affiliate_id or not url_produto:
+        return None
     url_limpa = limpar_url_produto(url_produto)
-    affiliate_id = getattr(config, "SHOPEE_AFFILIATE_ID", "18397151176")
-    sub_id = getattr(config, "SHOPEE_USER_ID", "ryue1a5nua")
-    return (
+    link = (
         "https://s.shopee.com.br/an_redir"
         f"?origin_link={quote(url_limpa, safe='')}"
-        f"&affiliate_id={affiliate_id}&sub_id={sub_id}"
+        f"&affiliate_id={affiliate_id}"
     )
+    if sub_id:
+        link += f"&sub_id={sub_id}"
+    return link
+
+
+def _arquivo_desatualizado() -> bool:
+    """True se o arquivo está mais velho que SHOPEE_MAX_IDADE_HORAS (0 desliga a checagem)."""
+    limite_h = getattr(config, "SHOPEE_MAX_IDADE_HORAS", 72)
+    if not limite_h:
+        return False
+    idade_h = (time.time() - ARQUIVO.stat().st_mtime) / 3600
+    if idade_h > limite_h:
+        logger.error(
+            "Shopee: %s foi atualizado há %.0f h (limite %d h). Cole respostas novas do painel; "
+            "oferta antiga pode estar expirada. Shopee ignorada neste ciclo.",
+            ARQUIVO.name, idade_h, limite_h,
+        )
+        return True
+    return False
 
 
 def _ler_itens() -> List[dict]:
     if not ARQUIVO.exists():
         logger.error("Arquivo %s não encontrado. Cole ali as respostas do painel.", ARQUIVO)
+        return []
+    if _arquivo_desatualizado():
         return []
 
     texto = ARQUIVO.read_text(encoding="utf-8-sig")
@@ -111,6 +145,9 @@ def _extrair_promocao(item: dict, categoria: str, min_desc: float, preco_max: fl
 
     url_produto = item.get("product_link") or f"https://shopee.com.br/product/{shop_id}/{item_id}"
     url_afiliado = item.get("long_link") or montar_link_afiliado(url_produto)
+    if not url_afiliado:
+        logger.warning("Shopee: item %s sem long_link e sem IDs de afiliado; ignorado.", item_id)
+        return None
     img = info.get("image")
 
     return {
@@ -124,7 +161,8 @@ def _extrair_promocao(item: dict, categoria: str, min_desc: float, preco_max: fl
         "imagem": f"{IMG_BASE}{img}" if img else None,
         "url_produto": url_produto,
         "url_afiliado": url_afiliado,
-        "cupom": getattr(config, "CUPOM_DESCONTO", None),
+        # Cupom próprio da Shopee: nunca reaproveita o cupom do Mercado Livre
+        "cupom": getattr(config, "SHOPEE_CUPOM", None),
     }
 
 
