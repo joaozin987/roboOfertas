@@ -19,10 +19,14 @@ logger = logging.getLogger(__name__)
 
 IMG_BASE = "https://down-br.img.susercontent.com/file/"
 
-# O bot rotaciona estes nichos; aqui existe só um, porque a lista vem do arquivo.
-NICHOS_ESTRATEGICOS = [
-    {"nome": "Ofertas Shopee", "url": "arquivo"},
-]
+# Nichos para classificação automática baseada no título do produto
+NICHO_KEYWORDS = {
+    "Perfumes & Fragrâncias": ["perfume", "colônia", "colonia", "eau de", "fragrancia", "fragrância", "body splash", "lattafa", "deo"],
+    "Fitness & Suplementos": ["creatina", "whey", "suplemento", "pre-treino", "pré-treino", "bcaa", "malas de academia", "garrafa", "termogenico"],
+    "Malas & Viagem": ["mala de bordo", "mala de viagem", "mochila", "necessaire", "necessaire", "cadeado", "frasqueira"],
+    "Moda & Vestuário": ["camisa", "camiseta", "bermuda", "calça", "vestido", "short", "jaqueta", "blusa", "casaco", "conjunto"],
+    "Tecnologia & Gadgets": ["fone", "bluetooth", "carregador", "smartwatch", "cabo", "suporte", "mouse", "teclado", "power bank"],
+}
 
 
 def _caminho_arquivo() -> Path:
@@ -73,6 +77,15 @@ def montar_link_afiliado(url_produto: str) -> Optional[str]:
     return link
 
 
+def _classificar_categoria(titulo: str) -> str:
+    """Identifica o nicho estrategicamente com base no título do produto."""
+    titulo_lower = titulo.lower()
+    for categoria, palavras in NICHO_KEYWORDS.items():
+        if any(palavra in titulo_lower for palavra in palavras):
+            return categoria
+    return "Achados Shopee"
+
+
 def _arquivo_desatualizado() -> bool:
     """True se o arquivo está mais velho que SHOPEE_MAX_IDADE_HORAS (0 desliga a checagem)."""
     limite_h = getattr(config, "SHOPEE_MAX_IDADE_HORAS", 72)
@@ -118,7 +131,7 @@ def _ler_itens() -> List[dict]:
     return itens
 
 
-def _extrair_promocao(item: dict, categoria: str, min_desc: float, preco_max: float) -> Optional[dict]:
+def _extrair_promocao(item: dict, min_desc: float, preco_max: float) -> Optional[dict]:
     info = item.get("batch_item_for_item_card_full") or {}
     titulo = (info.get("name") or "").strip()
     item_id = str(item.get("item_id") or info.get("itemid") or "")
@@ -150,6 +163,9 @@ def _extrair_promocao(item: dict, categoria: str, min_desc: float, preco_max: fl
         return None
     img = info.get("image")
 
+    # Classifica dinamicamente a categoria com base no título
+    categoria = _classificar_categoria(titulo)
+
     return {
         "produto_id": f"shopee_{shop_id}_{item_id}",
         "origem": "shopee",
@@ -169,7 +185,8 @@ def _extrair_promocao(item: dict, categoria: str, min_desc: float, preco_max: fl
 def buscar_ofertas(
     url_categoria: Optional[str] = None, max_paginas: Optional[int] = None
 ) -> List[Dict]:
-    min_desc = float(getattr(config, "SHOPEE_MIN_DESCONTO", 30.0))
+    # Reduzido para 20.0 por padrão para flexibilizar as capturas de novos nichos
+    min_desc = float(getattr(config, "SHOPEE_SHOPEE_MIN_DESCONTO", getattr(config, "SHOPEE_MIN_DESCONTO", 20.0)))
     preco_max = float(getattr(config, "SHOPEE_PRECO_MAXIMO", 900.0))
 
     itens = _ler_itens()
@@ -178,7 +195,7 @@ def buscar_ofertas(
     vistos = set()
     promocoes: List[Dict] = []
     for item in itens:
-        promo = _extrair_promocao(item, "Ofertas Shopee", min_desc, preco_max)
+        promo = _extrair_promocao(item, min_desc, preco_max)
         if promo and promo["produto_id"] not in vistos:
             vistos.add(promo["produto_id"])
             promocoes.append(promo)
