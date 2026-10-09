@@ -23,11 +23,6 @@ BASE_URL = "https://www.mercadolivre.com.br"
 # NICHOS ESTRATEGICOS (Com Perfumes Árabes e Nacionais Inclusos)
 # ==============================================================
 NICHOS_ESTRATEGICOS = [
-    {"nome": "Perfumes Árabes Hype", "url": "https://lista.mercadolivre.com.br/beleza-cuidado-pessoal/perfumes/perfumes-arabes"},
-    {"nome": "Perfumaria Nacional Top", "url": "https://lista.mercadolivre.com.br/beleza-cuidado-pessoal/perfumes/boticario-natura"},
-    {"nome": "Nutrição & Performance Fitness",   "url": "https://lista.mercadolivre.com.br/esportes-fitness/suplementos/nutricao-esportiva"},
-    {"nome": "Malas & Viagem", "url": "https://lista.mercadolivre.com.br/calcados-roupas/malas-bolsas/malas-viagem"},
-    {"nome": "Moda & Vestuário", "url": "https://lista.mercadolivre.com.br/calcados-roupas/roupas"},
     {"nome": "Super Queimas & Liquidação", "url": "https://www.mercadolivre.com.br/ofertas"},
     {"nome": "Smartphones & Celulares", "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051"},
     {"nome": "Moda & Calçados", "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1430"},
