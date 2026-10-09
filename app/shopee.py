@@ -23,14 +23,13 @@ IMG_BASE = "https://down-br.img.susercontent.com/file/"
 NICHO_KEYWORDS = {
     "Perfumes & Fragrâncias": ["perfume", "colônia", "colonia", "eau de", "fragrancia", "fragrância", "body splash", "lattafa", "deo"],
     "Fitness & Suplementos": ["creatina", "whey", "suplemento", "pre-treino", "pré-treino", "bcaa", "malas de academia", "garrafa", "termogenico"],
-    "Malas & Viagem": ["mala de bordo", "mala de viagem", "mochila", "necessaire", "necessaire", "cadeado", "frasqueira"],
+    "Malas & Viagem": ["mala de bordo", "mala de viagem", "mochila", "necessaire", "cadeado", "frasqueira"],
     "Moda & Vestuário": ["camisa", "camiseta", "bermuda", "calça", "vestido", "short", "jaqueta", "blusa", "casaco", "conjunto"],
     "Tecnologia & Gadgets": ["fone", "bluetooth", "carregador", "smartwatch", "cabo", "suporte", "mouse", "teclado", "power bank"],
 }
 
 
 def _caminho_arquivo() -> Path:
-    """Caminho relativo é resolvido a partir da raiz do projeto, não da pasta onde o bot foi iniciado."""
     caminho = Path(getattr(config, "SHOPEE_JSON_PATH", "data/shopee_oferta.json"))
     if not caminho.is_absolute():
         caminho = Path(__file__).resolve().parent.parent / caminho
@@ -61,7 +60,6 @@ def limpar_url_produto(url: str) -> str:
 
 
 def montar_link_afiliado(url_produto: str) -> Optional[str]:
-    """Reserva, usada só se a resposta vier sem long_link. Sem IDs de afiliado => None."""
     affiliate_id = getattr(config, "SHOPEE_AFFILIATE_ID", "")
     sub_id = getattr(config, "SHOPEE_USER_ID", "")
     if not affiliate_id or not url_produto:
@@ -78,7 +76,6 @@ def montar_link_afiliado(url_produto: str) -> Optional[str]:
 
 
 def _classificar_categoria(titulo: str) -> str:
-    """Identifica o nicho estrategicamente com base no título do produto."""
     titulo_lower = titulo.lower()
     for categoria, palavras in NICHO_KEYWORDS.items():
         if any(palavra in titulo_lower for palavra in palavras):
@@ -87,15 +84,13 @@ def _classificar_categoria(titulo: str) -> str:
 
 
 def _arquivo_desatualizado() -> bool:
-    """True se o arquivo está mais velho que SHOPEE_MAX_IDADE_HORAS (0 desliga a checagem)."""
     limite_h = getattr(config, "SHOPEE_MAX_IDADE_HORAS", 72)
     if not limite_h:
         return False
     idade_h = (time.time() - ARQUIVO.stat().st_mtime) / 3600
     if idade_h > limite_h:
         logger.error(
-            "Shopee: %s foi atualizado há %.0f h (limite %d h). Cole respostas novas do painel; "
-            "oferta antiga pode estar expirada. Shopee ignorada neste ciclo.",
+            "Shopee: %s foi atualizado há %.0f h (limite %d h).",
             ARQUIVO.name, idade_h, limite_h,
         )
         return True
@@ -104,12 +99,18 @@ def _arquivo_desatualizado() -> bool:
 
 def _ler_itens() -> List[dict]:
     if not ARQUIVO.exists():
-        logger.error("Arquivo %s não encontrado. Cole ali as respostas do painel.", ARQUIVO)
+        logger.error("Arquivo %s não encontrado.", ARQUIVO)
         return []
     if _arquivo_desatualizado():
         return []
 
-    texto = ARQUIVO.read_text(encoding="utf-8-sig")
+    texto = ARQUIVO.read_text(encoding="utf-8-sig").strip()
+    
+    # Blindagem: se o conteúdo começar com HTML, avisa claramente em vez de quebrar
+    if texto.startswith("<!DOCTYPE") or texto.startswith("<html"):
+        logger.error("Shopee: O arquivo %s contém código HTML (página web), mas é esperado o JSON da API de afiliados.", ARQUIVO.name)
+        return []
+
     decoder = json.JSONDecoder()
     itens: List[dict] = []
     i, n = 0, len(texto)
@@ -159,11 +160,8 @@ def _extrair_promocao(item: dict, min_desc: float, preco_max: float) -> Optional
     url_produto = item.get("product_link") or f"https://shopee.com.br/product/{shop_id}/{item_id}"
     url_afiliado = item.get("long_link") or montar_link_afiliado(url_produto)
     if not url_afiliado:
-        logger.warning("Shopee: item %s sem long_link e sem IDs de afiliado; ignorado.", item_id)
         return None
     img = info.get("image")
-
-    # Classifica dinamicamente a categoria com base no título
     categoria = _classificar_categoria(titulo)
 
     return {
@@ -177,7 +175,6 @@ def _extrair_promocao(item: dict, min_desc: float, preco_max: float) -> Optional
         "imagem": f"{IMG_BASE}{img}" if img else None,
         "url_produto": url_produto,
         "url_afiliado": url_afiliado,
-        # Cupom próprio da Shopee: nunca reaproveita o cupom do Mercado Livre
         "cupom": getattr(config, "SHOPEE_CUPOM", None),
     }
 
@@ -185,8 +182,7 @@ def _extrair_promocao(item: dict, min_desc: float, preco_max: float) -> Optional
 def buscar_ofertas(
     url_categoria: Optional[str] = None, max_paginas: Optional[int] = None
 ) -> List[Dict]:
-    # Reduzido para 20.0 por padrão para flexibilizar as capturas de novos nichos
-    min_desc = float(getattr(config, "SHOPEE_SHOPEE_MIN_DESCONTO", getattr(config, "SHOPEE_MIN_DESCONTO", 20.0)))
+    min_desc = float(getattr(config, "SHOPEE_MIN_DESCONTO", 20.0))
     preco_max = float(getattr(config, "SHOPEE_PRECO_MAXIMO", 900.0))
 
     itens = _ler_itens()
