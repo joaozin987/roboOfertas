@@ -1,9 +1,7 @@
 """
 Shopee: lê as ofertas copiadas do painel de afiliados (resposta da chamada
 "offer/product/list") de um arquivo e entrega prontas para o bot.
-O link de afiliado (long_link) já vem pronto da própria Shopee.
-
-Arquivo lido: data/shopee_oferta.json (pode ter várias respostas coladas em sequência)
+Gera os links de afiliado dinamicamente para evitar links expirados.
 """
 
 import json
@@ -19,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 IMG_BASE = "https://down-br.img.susercontent.com/file/"
 
-# Nichos para classificação automática baseada no título do produto
 NICHO_KEYWORDS = {
     "Perfumes & Fragrâncias": ["perfume", "colônia", "colonia", "eau de", "fragrancia", "fragrância", "body splash", "lattafa", "deo"],
     "Fitness & Suplementos": ["creatina", "whey", "suplemento", "pre-treino", "pré-treino", "bcaa", "malas de academia", "garrafa", "termogenico"],
@@ -87,6 +84,8 @@ def _arquivo_desatualizado() -> bool:
     limite_h = getattr(config, "SHOPEE_MAX_IDADE_HORAS", 72)
     if not limite_h:
         return False
+    if not ARQUIVO.exists():
+        return False
     idade_h = (time.time() - ARQUIVO.stat().st_mtime) / 3600
     if idade_h > limite_h:
         logger.error(
@@ -106,9 +105,9 @@ def _ler_itens() -> List[dict]:
 
     texto = ARQUIVO.read_text(encoding="utf-8-sig").strip()
     
-    # Blindagem: se o conteúdo começar com HTML, avisa claramente em vez de quebrar
+    # Se a Shopee bloquear e retornar HTML, avisa sem derrubar o bot inteiro
     if texto.startswith("<!DOCTYPE") or texto.startswith("<html"):
-        logger.error("Shopee: O arquivo %s contém código HTML (página web), mas é esperado o JSON da API de afiliados.", ARQUIVO.name)
+        logger.warning("Shopee: Detectado bloqueio anti-bot (HTML) em %s. Mantendo operação.", ARQUIVO.name)
         return []
 
     decoder = json.JSONDecoder()
@@ -157,10 +156,13 @@ def _extrair_promocao(item: dict, min_desc: float, preco_max: float) -> Optional
     if desconto < min_desc or atual > preco_max:
         return None
 
+    # CORREÇÃO PRINCIPAL: Sempre monta o link novo e limpo dinamicamente para nunca expirar
     url_produto = item.get("product_link") or f"https://shopee.com.br/product/{shop_id}/{item_id}"
-    url_afiliado = item.get("long_link") or montar_link_afiliado(url_produto)
+    url_afiliado = montar_link_afiliado(url_produto) or item.get("long_link")
+    
     if not url_afiliado:
         return None
+        
     img = info.get("image")
     categoria = _classificar_categoria(titulo)
 
