@@ -1,7 +1,9 @@
 """
 Shopee: lê as ofertas copiadas do painel de afiliados (resposta da chamada
 "offer/product/list") de um arquivo e entrega prontas para o bot.
-Gera os links de afiliado dinamicamente para evitar links expirados.
+O link de afiliado é gerado dinamicamente para evitar links expirados.
+
+Arquivo lido: data/shopee_oferta.json (pode ter várias respostas coladas em sequência)
 """
 
 import json
@@ -17,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 IMG_BASE = "https://down-br.img.susercontent.com/file/"
 
+# Nichos para classificação automática baseada no título do produto
 NICHO_KEYWORDS = {
     "Perfumes & Fragrâncias": ["perfume", "colônia", "colonia", "eau de", "fragrancia", "fragrância", "body splash", "lattafa", "deo"],
     "Fitness & Suplementos": ["creatina", "whey", "suplemento", "pre-treino", "pré-treino", "bcaa", "malas de academia", "garrafa", "termogenico"],
@@ -37,8 +40,15 @@ ARQUIVO = _caminho_arquivo()
 
 
 def _preco(valor) -> Optional[float]:
+    """Normaliza o preço vindo da API da Shopee para Reais reais."""
     try:
-        return round(int(valor) / 100000, 2)
+        if not valor:
+            return None
+        num = int(valor)
+        # Se vier no formato interno cheio de zeros da Shopee (ex: 799000 ou 1990000)
+        if num > 10000:
+            return round(num / 100000, 2)
+        return round(float(num), 2)
     except (TypeError, ValueError):
         return None
 
@@ -105,9 +115,9 @@ def _ler_itens() -> List[dict]:
 
     texto = ARQUIVO.read_text(encoding="utf-8-sig").strip()
     
-    # Se a Shopee bloquear e retornar HTML, avisa sem derrubar o bot inteiro
+    # Blindagem: se o conteúdo começar com HTML, avisa claramente em vez de quebrar
     if texto.startswith("<!DOCTYPE") or texto.startswith("<html"):
-        logger.warning("Shopee: Detectado bloqueio anti-bot (HTML) em %s. Mantendo operação.", ARQUIVO.name)
+        logger.error("Shopee: O arquivo %s contém código HTML (página web), mas é esperado o JSON da API de afiliados.", ARQUIVO.name)
         return []
 
     decoder = json.JSONDecoder()
@@ -156,7 +166,7 @@ def _extrair_promocao(item: dict, min_desc: float, preco_max: float) -> Optional
     if desconto < min_desc or atual > preco_max:
         return None
 
-    # CORREÇÃO PRINCIPAL: Sempre monta o link novo e limpo dinamicamente para nunca expirar
+    # CORREÇÃO: Força a montagem dinâmica do link de afiliado limpo para evitar links longos expirados
     url_produto = item.get("product_link") or f"https://shopee.com.br/product/{shop_id}/{item_id}"
     url_afiliado = montar_link_afiliado(url_produto) or item.get("long_link")
     
@@ -185,7 +195,7 @@ def buscar_ofertas(
     url_categoria: Optional[str] = None, max_paginas: Optional[int] = None
 ) -> List[Dict]:
     min_desc = float(getattr(config, "SHOPEE_MIN_DESCONTO", 20.0))
-    preco_max = float(getattr(config, "SHOPEE_PRECO_MAXIMO", 900.0))
+    preco_max = float(getattr(config, "SHOPEE_PRECO_MAXIMO", 50000.0))
 
     itens = _ler_itens()
     logger.info("Shopee: %d itens lidos de %s", len(itens), ARQUIVO)
