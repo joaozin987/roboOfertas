@@ -29,12 +29,13 @@ const OFFERS = [];
    ============================================================ */
 const track = (eventName) => {
   try {
-    if (window.fbq) window.fbq("trackCustom", eventName);
+    if (window.fbq) {
+      window.fbq("trackCustom", eventName);
+      window.fbq("track", "Lead");
+    }
     if (window.gtag) window.gtag("event", eventName);
     if (window.dataLayer) window.dataLayer.push({ event: eventName });
-  } catch (e) {
-    /* nunca travar o clique */
-  }
+  } catch (e) {}
 };
 
 const FACTS = [
