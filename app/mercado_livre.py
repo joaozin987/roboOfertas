@@ -23,7 +23,6 @@ BASE_URL = "https://www.mercadolivre.com.br"
 # NICHOS ESTRATEGICOS (Com Perfumes Árabes e Nacionais Inclusos)
 # ==============================================================
 NICHOS_ESTRATEGICOS = [
-    {"nome": "Super Queimas & Liquidação", "url": "https://www.mercadolivre.com.br/ofertas"},
     {"nome": "Smartphones & Celulares", "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051"},
     {"nome": "Moda & Calçados", "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1430"},
     {"nome": "Corrida & Esportes", "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1276"},
