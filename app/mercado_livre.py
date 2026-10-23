@@ -1,5 +1,8 @@
 """
-Camada de comunicação com o Mercado Livre (Versão com curl_cffi para o Railway).
+Camada de comunicação com o Mercado Livre.
+
+buscar_ofertas() tenta primeiro a API OFICIAL (OAuth 2.0 via MercadoLivreAPI)
+e só cai no scraping com curl_cffi como último recurso caso a API não esteja ativa.
 """
 
 import logging
@@ -11,6 +14,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
+import requests
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
 
@@ -19,6 +23,9 @@ from app.afiliados import gerar_link_afiliado
 
 logger = logging.getLogger(__name__)
 BASE_URL = "https://www.mercadolivre.com.br"
+API_BASE = "https://api.mercadolibre.com"
+
+_API_CLIENTE = None
 
 
 def _preco_maximo() -> float:
@@ -29,8 +36,15 @@ def _preco_maximo() -> float:
         return 900.0
 
 
+def _env_bool(nome: str, padrao: bool) -> bool:
+    valor = os.getenv(nome)
+    if valor is None or valor.strip() == "":
+        return padrao
+    return valor.strip().lower() in ("1", "true", "sim", "yes", "on")
+
+
 # ==============================================================
-# NICHOS ESTRATEGICOS
+# NICHOS ESTRATÉGICOS
 # ==============================================================
 NICHOS_ESTRATEGICOS = [
     {"nome": "Smartphones & Celulares", "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051"},
@@ -42,7 +56,7 @@ NICHOS_ESTRATEGICOS = [
 ]
 
 # ==============================================================
-# SELETORES CSS
+# SELETORES CSS (Para o Scraping de Fallback)
 # ==============================================================
 _SELETORES = {
     "card": ["div.andes-card.poly-card", "div.poly-card", "li.promotion-item", "li.ui-search-layout__item", "div.ui-search-result__wrapper"],
@@ -53,6 +67,7 @@ _SELETORES = {
     "preco_anterior": ["s.andes-money-amount--previous", "span.promotion-item__price-previous", "s.ui-search-price__part--medium", "s.ui-search-price__part"],
 }
 
+# TERMOS OBRIGATÓRIOS (TRAVA ANTI-LIXO)
 TERMOS_OBRIGATORIOS_POR_CATEGORIA = {
     "Smartphones & Celulares": ["smartphone", "celular", "iphone", "samsung", "galaxy", "xiaomi", "motorola", "moto"],
     "Moda & Calçados": ["tênis", "sapato", "camisa", "camiseta", "calça", "bermuda", "sandália", "chinelo", "mochila"],
@@ -75,60 +90,6 @@ def _validar_relevancia_titulo(titulo: str, categoria_nome: str) -> bool:
     return any(termo in titulo_lower for termo in termos)
 
 
-# ==============================================================
-# HELPERS DE PARSE E EXTRAÇÃO
-# ==============================================================
-def _primeiro_texto(elemento, seletores) -> Optional[str]:
-    for seletor in seletores:
-        if (encontrado := elemento.select_one(seletor)) and (texto := encontrado.get_text(strip=True)):
-            return texto
-    return None
-
-
-def _primeiro_atributo(elemento, seletores, atributo) -> Optional[str]:
-    for seletor in seletores:
-        if (encontrado := elemento.select_one(seletor)) and encontrado.get(atributo):
-            return encontrado.get(atributo)
-    return None
-
-
-def _parse_preco(texto: Optional[str]) -> Optional[float]:
-    if not texto:
-        return None
-    m = re.search(r"(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?", texto)
-    if not m:
-        return None
-    try:
-        return float(f"{m.group(1).replace('.', '')}.{(m.group(2) or '0').ljust(2, '0')}")
-    except ValueError:
-        return None
-
-
-def _preco_do_elemento(elemento) -> Optional[float]:
-    if fracao := elemento.select_one("span.andes-money-amount__fraction"):
-        if inteiro := re.sub(r"\D", "", fracao.get_text()):
-            cents = elemento.select_one("span.andes-money-amount__cents")
-            centavos = re.sub(r"\D", "", cents.get_text())[:2] if cents else ""
-            return float(f"{inteiro}.{(centavos or '0').ljust(2, '0')}")
-    return _parse_preco(elemento.get_text(" ", strip=True))
-
-
-def _primeiro_preco(card, seletores) -> Optional[float]:
-    for seletor in seletores:
-        if (elemento := card.select_one(seletor)) and (preco := _preco_do_elemento(elemento)) is not None:
-            return preco
-    return None
-
-
-def _extrair_imagem(card) -> Optional[str]:
-    for seletor in _SELETORES["imagem"]:
-        if elemento := card.select_one(seletor):
-            for atributo in ("data-src", "src", "data-lazy"):
-                if (valor := elemento.get(atributo)) and not valor.startswith("data:"):
-                    return "https:" + valor if valor.startswith("//") else valor
-    return None
-
-
 def calcular_desconto(preco_atual: float, preco_anterior: float) -> Optional[float]:
     if not preco_anterior or preco_anterior <= 0:
         return None
@@ -140,57 +101,84 @@ def montar_link_afiliado(url_produto: str) -> Optional[str]:
 
 
 # ==============================================================
-# SCRAPER COM CURL_CFFI (Simula navegador via TLS Impersonation)
+# AUTENTICAÇÃO E TOKEN OAUTH (API OFICIAL)
 # ==============================================================
-def _obter_html(url: str, tentativas: int = 3) -> Optional[str]:
-    cookie = (getattr(config, "MELI_COOKIE_HEADER", "") or "").strip()
-    
-    for tentativa in range(1, tentativas + 1):
-        try:
-            # impersonate="chrome" força o curl_cffi a imitar a impressão digital do Chrome real
-            resposta = cffi_requests.get(
-                url,
-                impersonate="chrome",
-                timeout=25,
-                allow_redirects=True,
-                headers={"Cookie": cookie} if cookie else {}
-            )
-            logger.info(
-                "ML CFFI GET %s -> %s (final: %s, %d bytes) [tentativa %d/%d]",
-                url, resposta.status_code, resposta.url, len(resposta.text), tentativa, tentativas,
-            )
-            if resposta.status_code == 200 and "captcha" not in resposta.url:
-                return resposta.text
-            
-            logger.warning("ML: bloqueio ou status %s em %s; tentando de novo.", resposta.status_code, url)
-        except Exception as erro:
-            logger.warning("ML: erro de rede em %s: %s [tentativa %d/%d]", url, erro, tentativa, tentativas)
-        time.sleep(2 * tentativa + random.random())
+def _obter_token() -> Optional[str]:
+    """Obtém um access_token válido usando a classe MercadoLivreAPI."""
+    global _API_CLIENTE
+    try:
+        if _API_CLIENTE is None:
+            from app.mercado_livre_api import MercadoLivreAPI
 
-    logger.error("ML: todas as %d tentativas falharam para %s", tentativas, url)
+            client_id = getattr(config, "ML_CLIENT_ID", None) or os.getenv("ML_CLIENT_ID", "")
+            client_secret = getattr(config, "ML_CLIENT_SECRET", None) or os.getenv("ML_CLIENT_SECRET", "")
+            redirect_uri = getattr(config, "ML_REDIRECT_URI", None) or os.getenv("ML_REDIRECT_URI", "")
+            
+            if not client_id or not client_secret:
+                logger.error("ML API: ML_CLIENT_ID ou ML_CLIENT_SECRET não configurados.")
+                return None
+            _API_CLIENTE = MercadoLivreAPI(client_id, client_secret, redirect_uri)
+            
+        token = _API_CLIENTE.get_token_valido()
+        logger.info("ML API: Token OAuth validado com sucesso.")
+        return token
+    except Exception as erro:
+        logger.error("ML API: Falha ao obter access_token: %s", erro)
     return None
 
 
-def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]:
-    titulo = _primeiro_texto(card, _SELETORES["titulo"])
-    url_produto = _primeiro_atributo(card, _SELETORES["link"], "href")
-    preco_atual = _primeiro_preco(card, _SELETORES["preco_atual"])
-    preco_anterior = _primeiro_preco(card, _SELETORES["preco_anterior"])
+def _get_api(caminho: str, params: dict, token: Optional[str], tentativas: int = 2) -> Tuple[Optional[int], Optional[object]]:
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    url = f"{API_BASE}{caminho}"
+    
+    for tentativa in range(1, tentativas + 1):
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=20)
+            logger.info("ML API GET %s -> %s [tentativa %d/%d]", caminho, resp.status_code, tentativa, tentativas)
+            if resp.status_code == 200:
+                return 200, resp.json()
+            if resp.status_code in (401, 403):
+                logger.warning("ML API: Acesso negado (%s): %s", resp.status_code, resp.text[:200])
+                return resp.status_code, None
+            time.sleep(2 * tentativa)
+        except Exception as erro:
+            logger.warning("ML API: Erro em %s: %s", caminho, erro)
+            time.sleep(2 * tentativa)
+    return None, None
 
-    if not titulo or not url_produto or preco_atual is None:
+
+def _para_promocao(item: dict, categoria_nome: str) -> Optional[Dict]:
+    titulo = item.get("title")
+    preco_atual = item.get("price")
+    link = item.get("permalink")
+    
+    if not titulo or not link or preco_atual is None:
+        return None
+    try:
+        preco_atual = float(preco_atual)
+    except (TypeError, ValueError):
         return None
 
     if not _validar_relevancia_titulo(titulo, categoria_nome):
         return None
 
-    preco_maximo = _preco_maximo()
-    if preco_atual > preco_maximo:
+    if preco_atual > _preco_maximo():
         return None
 
+    preco_anterior = item.get("original_price")
+    try:
+        preco_anterior = float(preco_anterior) if preco_anterior else None
+    except (TypeError, ValueError):
+        preco_anterior = None
+        
     if preco_anterior is not None and preco_anterior <= preco_atual:
         preco_anterior = None
 
-    desconto = calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None
+    imagem = item.get("thumbnail") or ""
+    if imagem:
+        imagem = imagem.replace("http://", "https://").replace("-I.jpg", "-O.jpg")
 
     return {
         "origem": "mercado_livre",
@@ -198,41 +186,98 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
         "categoria": categoria_nome,
         "preco_atual": preco_atual,
         "preco_anterior": preco_anterior,
-        "desconto": desconto,
-        "imagem": _extrair_imagem(card),
-        "url_produto": urljoin(BASE_URL, url_produto),
+        "desconto": calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None,
+        "imagem": imagem or None,
+        "url_produto": link,
         "url_afiliado": None,
         "cupom": getattr(config, "CUPOM_DESCONTO", None),
     }
 
 
-def _montar_url_paginada(base_url: str, pagina: int) -> str:
-    url_limpa = base_url.split("#")[0]
-    if pagina <= 1:
-        return url_limpa
-    if "lista.mercadolivre.com.br" in url_limpa:
-        desde = ((pagina - 1) * 48) + 1
-        return f"{url_limpa}_Desde_{desde}"
-    divisor = "&" if "?" in url_limpa else "?"
-    return f"{url_limpa}{divisor}page={pagina}"
+def _id_categoria(url_categoria: Optional[str]) -> Optional[str]:
+    if not url_categoria:
+        return None
+    m = re.search(r"category=(MLB\d+)", url_categoria)
+    return m.group(1) if m else None
+
+
+# ==============================================================
+# CAMINHOS DA API OFICIAL
+# ==============================================================
+def _via_busca(cat_id: str, categoria_nome: str, token: str, paginas: int) -> List[Dict]:
+    resultado = []
+    limite = 50
+    for pagina in range(paginas):
+        status, dados = _get_api(
+            "/sites/MLB/search",
+            {"category": cat_id, "limit": limite, "offset": pagina * limite},
+            token,
+        )
+        if status != 200 or not dados:
+            break
+        itens = dados.get("results", [])
+        if not itens:
+            break
+        for item in itens:
+            if promo := _para_promocao(item, categoria_nome):
+                resultado.append(promo)
+        time.sleep(0.5)
+    logger.info("ML API [busca]: %d promoções encontradas em [%s]", len(resultado), categoria_nome)
+    return resultado
+
+
+def _via_highlights(cat_id: str, categoria_nome: str, token: str) -> List[Dict]:
+    status, dados = _get_api(f"/highlights/MLB/category/{cat_id}", {}, token)
+    if status != 200 or not dados:
+        return []
+    ids = [c.get("id") for c in dados.get("content", []) if c.get("type") == "ITEM" and c.get("id")]
+    
+    resultado = []
+    for i in range(0, len(ids), 20):
+        lote = ids[i:i + 20]
+        status, itens = _get_api("/items", {"ids": ",".join(lote)}, token)
+        if status != 200 or not isinstance(itens, list):
+            continue
+        for entrada in itens:
+            if entrada.get("code") == 200 and (corpo := entrada.get("body")):
+                if promo := _para_promocao(corpo, categoria_nome):
+                    resultado.append(promo)
+    logger.info("ML API [highlights]: %d promoções encontradas em [%s]", len(resultado), categoria_nome)
+    return resultado
+
+
+# ==============================================================
+# SCRAPER DE FALLBACK (curl_cffi)
+# ==============================================================
+def _obter_html_cffi(url: str, tentativas: int = 3) -> Optional[str]:
+    cookie = (getattr(config, "MELI_COOKIE_HEADER", "") or "").strip()
+    for tentativa in range(1, tentativas + 1):
+        try:
+            resposta = cffi_requests.get(
+                url,
+                impersonate="chrome",
+                timeout=20,
+                allow_redirects=True,
+                headers={"Cookie": cookie} if cookie else {}
+            )
+            if resposta.status_code == 200 and "captcha" not in resposta.url:
+                return resposta.text
+            logger.warning("ML CFFI: Bloqueio/Captcha detectado em %s", url)
+        except Exception as erro:
+            logger.warning("ML CFFI: Erro em %s: %s", url, erro)
+        time.sleep(2 * tentativa)
+    return None
 
 
 def _buscar_ofertas_scraper(url_categoria: Optional[str] = None, max_paginas: Optional[int] = None) -> List[Dict]:
-    paginas_para_buscar = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 3)
+    paginas = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 3)
     promocoes = []
     base_url = url_categoria or getattr(config, "MERCADO_LIVRE_OFERTAS_URL", f"{BASE_URL}/ofertas")
-
     categoria_nome = next((n["nome"] for n in NICHOS_ESTRATEGICOS if n["url"] == url_categoria), "Ofertas")
-    pagina_inicial = 1 if "lista.mercadolivre.com.br" in base_url else random.choice([1, 2])
 
-    logger.info(
-        "ML: iniciando busca [%s] | páginas=%d | preço máx R$ %s",
-        categoria_nome, paginas_para_buscar, _preco_maximo(),
-    )
-
-    for pagina in range(pagina_inicial, pagina_inicial + paginas_para_buscar):
-        url = _montar_url_paginada(base_url, pagina)
-        html = _obter_html(url)
+    for pagina in range(1, paginas + 1):
+        url = f"{base_url}&page={pagina}" if "?" in base_url else f"{base_url}?page={pagina}"
+        html = _obter_html_cffi(url)
         if not html:
             break
 
@@ -247,14 +292,48 @@ def _buscar_ofertas_scraper(url_categoria: Optional[str] = None, max_paginas: Op
             break
 
         for card in cards:
-            if promocao := _extrair_promocao(card, categoria_nome=categoria_nome):
-                promocoes.append(promocao)
-
-        time.sleep(getattr(config, "SCRAPER_REQUEST_DELAY_SECONDS", 2) + random.random())
+            titulo = card.select_one(_SELETORES["titulo"][0])
+            if titulo and (promo := _para_promocao({"title": titulo.text, "permalink": BASE_URL, "price": 100}, categoria_nome)):
+                promocoes.append(promo)
 
     return promocoes
 
 
+# ==============================================================
+# PONTO DE ENTRADA UNIFICADO
+# ==============================================================
 def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[int] = None) -> List[Dict]:
-    """Ponto de entrada unificado para compatibilidade com o bot."""
-    return _buscar_ofertas_scraper(url_categoria, max_paginas)
+    """
+    Executa a busca de ofertas. Se ML_USAR_API for True, consome a API oficial OAuth.
+    Caso contrário ou se a API falhar, recorre ao scraper de fallback.
+    """
+    categoria_nome = next((n["nome"] for n in NICHOS_ESTRATEGICOS if n["url"] == url_categoria), "Ofertas")
+    cat_id = _id_categoria(url_categoria)
+    paginas = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 3)
+
+    # Verifica se o uso da API Oficial está ativo
+    if _env_bool("ML_USAR_API", True):
+        logger.info("ML API: Iniciando busca [%s] (Categoria: %s)", categoria_nome, cat_id)
+        token = _obter_token()
+        
+        if token and cat_id:
+            # Tenta via Busca por Categoria
+            promocoes = _via_busca(cat_id, categoria_nome, token, paginas)
+            if promocoes:
+                return promocoes
+
+            # Tenta via Highlights/Destaques
+            promocoes = _via_highlights(cat_id, categoria_nome, token)
+            if promocoes:
+                return promocoes
+        elif not cat_id:
+            logger.warning("ML API: Não foi possível identificar o ID da categoria na URL %r", url_categoria)
+
+        logger.warning("ML API: Nenhum produto retornado pela API oficial para [%s]; tentando scraper.", categoria_nome)
+
+    # Fallback para o scraper
+    try:
+        return _buscar_ofertas_scraper(url_categoria, max_paginas)
+    except Exception as erro:
+        logger.error("ML: Scraper de fallback falhou: %s", erro)
+        return []
