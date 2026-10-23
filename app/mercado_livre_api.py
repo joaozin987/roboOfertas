@@ -36,6 +36,10 @@ class MercadoLivreAPI:
 
     def _salvar_tokens(self, data: dict):
         data["expires_at"] = time.time() + data.get("expires_in", 21600) - 120
+        # Se a resposta não trouxer refresh_token, mantém o que já existia
+        if not data.get("refresh_token") and self.tokens.get("refresh_token"):
+            data["refresh_token"] = self.tokens["refresh_token"]
+        logger.info("Tokens salvos (campos: %s)", sorted(data.keys()))
         self.tokens = data
         TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(TOKEN_FILE, "w", encoding="utf-8") as f:
@@ -61,11 +65,18 @@ class MercadoLivreAPI:
             raise Exception(f"Erro ao trocar token ({res.status_code}): {res.text}")
 
     def get_token_valido(self) -> str:
-        if not self.tokens.get("refresh_token"):
+        if not self.tokens.get("access_token"):
             raise ValueError("Token não encontrado. Execute com --auth-ml primeiro.")
 
+        # Token ainda válido: usa direto (não exige refresh_token)
         if time.time() < self.tokens.get("expires_at", 0):
             return self.tokens["access_token"]
+
+        if not self.tokens.get("refresh_token"):
+            raise ValueError(
+                "Token expirado e o arquivo não tem refresh_token. "
+                "Reautorize com --auth-ml (o app precisa permitir acesso offline)."
+            )
 
         logger.info("Renovando access_token expirado via refresh_token...")
         url = f"{self.base_url}/oauth/token"

@@ -12,6 +12,14 @@ import logging
 import sys
 import os
 
+# Garante que o .env seja lido antes de qualquer os.getenv (se python-dotenv estiver instalado)
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
 # Configura logs detalhados para exibir o progresso no terminal
 logging.basicConfig(
     level=logging.INFO,
@@ -22,19 +30,27 @@ logging.basicConfig(
 from app.bot import enviar_mensagem_teste, executar_ciclo, rodar_loop
 from app.mercado_livre_api import MercadoLivreAPI
 
-# Credenciais da aplicação do Mercado Livre
-ML_CLIENT_ID = os.getenv("ML_CLIENT_ID", "4484676904253948")
-ML_CLIENT_SECRET = os.getenv("ML_CLIENT_SECRET", "COLE_SUA_SECRET_KEY_AQUI")
-ML_REDIRECT_URI = "https://httpbin.org/get"
+# Credenciais da aplicação do Mercado Livre (vêm do .env, nada fixo no código)
+ML_CLIENT_ID = os.getenv("ML_CLIENT_ID", "").strip()
+ML_CLIENT_SECRET = os.getenv("ML_CLIENT_SECRET", "").strip()
+ML_REDIRECT_URI = os.getenv("ML_REDIRECT_URI", "https://www.google.com").strip()
+
 
 def autenticar_ml(tg_code: str):
+    if not ML_CLIENT_ID or not ML_CLIENT_SECRET:
+        logging.error("ML_CLIENT_ID / ML_CLIENT_SECRET não encontrados no .env.")
+        return
+
     logging.info("Iniciando troca do TG-Code pelos tokens do Mercado Livre...")
+    logging.info("client_id: %s | redirect_uri: %r", ML_CLIENT_ID, ML_REDIRECT_URI)
+
     ml = MercadoLivreAPI(ML_CLIENT_ID, ML_CLIENT_SECRET, ML_REDIRECT_URI)
     try:
         ml.inicializar_com_code(tg_code)
         logging.info("Autenticação concluída! Arquivo data/ml_tokens.json gerado.")
     except Exception as e:
         logging.error(f"Falha ao autenticar no Mercado Livre: {e}")
+
 
 if __name__ == "__main__":
     if "--auth-ml" in sys.argv:

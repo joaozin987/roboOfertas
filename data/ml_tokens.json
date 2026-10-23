@@ -1,0 +1,8 @@
+{
+  "access_token": "APP_USR-1619077522408335-102317-e3489e9ad9466a09132eed69c7ec6bcb-1012831595",
+  "token_type": "Bearer",
+  "expires_in": 21600,
+  "scope": "read urn:global:admin:info:/read-only urn:global:admin:info:/read-write urn:global:admin:oauth:/read-only urn:global:admin:oauth:/read-write urn:global:admin:users:/read-only urn:global:admin:users:/read-write urn:ml:all:comunication:/read-only urn:ml:mktp:comunication:/read-only write",
+  "user_id": 1012831595,
+  "expires_at": 1792813883.7858214
+}
