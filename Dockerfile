@@ -27,19 +27,22 @@ RUN apt-get update && apt-get install -y \
     libasound2-data \
     && rm -rf /var/lib/apt/lists/*
 
-# Copia os arquivos de dependência e instala os pacotes Python PRIMEIRO
+# Copia e instala todas as dependências do projeto
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# AGORA o pacote playwright está instalado e o binário pode ser executado
+# GARANTE explicitamente que o playwright está instalado no sistema global do container
+RUN pip install --no-cache-dir playwright
+
+# Agora executa a instalação dos binários do navegador sem erro de comando não encontrado
 RUN playwright install chromium
 RUN playwright install-deps chromium
 
-# Copia todo o código fonte para dentro do container
+# Copia o restante do código fonte
 COPY . .
 
-# Cria a pasta data caso ela não exista (onde o volume será montado)
+# Cria a pasta data para o volume persistente
 RUN mkdir -p /app/data
 
-# Comando padrão para iniciar o bot
+# Comando para iniciar a aplicação
 CMD ["python", "main.py"]
