@@ -1,5 +1,5 @@
 """
-Camada de comunicação com o Mercado Livre (Versão API JSON Pública - Sem Playwright / Sem Captcha).
+Camada de comunicação com o Mercado Livre (Versão API JSON Pública com Tratamento de Conexão).
 """
 
 import logging
@@ -24,7 +24,6 @@ def _preco_maximo() -> float:
         return 900.0
 
 
-# Nichos estratégicos mapeados para termos de busca limpos na API
 NICHOS_ESTRATEGICOS = [
     {"nome": "Smartphones & Celulares", "termo": "celulares smartphones", "url": "https://lista.mercadolivre.com.br/celulares-smartphones_NoIndex_True"},
     {"nome": "Moda & Calçados", "termo": "calcados roupas", "url": "https://lista.mercadolivre.com.br/calcados-roupas_NoIndex_True"},
@@ -65,17 +64,16 @@ def montar_link_afiliado(url_produto: str) -> Optional[str]:
 
 
 def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[int] = None) -> List[Dict]:
-    """Busca ofertas diretamente na API JSON pública do Mercado Livre."""
+    """Busca ofertas diretamente na API JSON pública do Mercado Livre com tratamento de DNS."""
     paginas_para_buscar = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 3)
     promocoes = []
 
-    # Identifica o nicho e o termo de busca correspondente
     nicho_atual = next((n for n in NICHOS_ESTRATEGICOS if n["url"] == url_categoria), None)
     termo_busca = nicho_atual["termo"] if nicho_atual else "ofertas"
     categoria_nome = nicho_atual["nome"] if nicho_atual else "Ofertas"
 
     url_api = "https://api.mercadolivre.com.br/sites/MLB/search"
-    limite_por_pagina = 50  # A API do ML aceita até 50 itens por requisição
+    limite_por_pagina = 50
 
     logger.info("ML API: iniciando busca [%s] (termo: '%s') | páginas=%d", categoria_nome, termo_busca, paginas_para_buscar)
 
@@ -121,10 +119,9 @@ def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[in
 
                 desconto = calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None
 
-                # Garante imagem em HTTPS de boa qualidade
                 imagem = item.get("thumbnail", "").replace("http://", "https://")
                 if "I.jpg" in imagem:
-                    imagem = imagem.replace("I.jpg", "O.jpg")  # Tenta pegar versão maior se disponível
+                    imagem = imagem.replace("I.jpg", "O.jpg")
 
                 promocoes.append({
                     "origem": "mercado_livre",
@@ -141,8 +138,11 @@ def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[in
 
             time.sleep(getattr(config, "SCRAPER_REQUEST_DELAY_SECONDS", 2) + random.random())
 
+        except requests.exceptions.ConnectionError as ce:
+            logger.warning("ML API: Falha de conexão/DNS ao acessar a API do Mercado Livre (tentativa %d): %s", pagina + 1, ce)
+            break
         except Exception as err:
-            logger.error("Erro ao consultar API JSON do Mercado Livre: %s", err, exc_info=True)
+            logger.error("Erro inesperado ao consultar API JSON do Mercado Livre: %s", err, exc_info=True)
             break
 
     logger.info("ML API: %d promoções obtidas com sucesso em [%s]", len(promocoes), categoria_nome)
