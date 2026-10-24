@@ -1,5 +1,5 @@
 """
-Camada de comunicação com o Mercado Livre (Versão Playwright Headless + Listagem Direta).
+Camada de comunicação com o Mercado Livre (Playwright Headless + Injeção de Cookies).
 """
 
 import logging
@@ -22,13 +22,16 @@ BASE_URL = "https://www.mercadolivre.com.br"
 
 
 def _preco_maximo() -> float:
+    """Preço máximo aceito no ML: variável ML_PRECO_MAXIMO do .env > config > 900."""
     try:
         return float(os.getenv("ML_PRECO_MAXIMO") or getattr(config, "ML_PRECO_MAXIMO", 900.0))
     except (TypeError, ValueError):
         return 900.0
 
 
-# Nichos estratégicos apontando para listagem de busca direta (evita bloqueio no Railway)
+# ==============================================================
+# NICHOS ESTRATEGICOS (Listagem Direta)
+# ==============================================================
 NICHOS_ESTRATEGICOS = [
     {"nome": "Smartphones & Celulares", "url": "https://lista.mercadolivre.com.br/celulares-smartphones_NoIndex_True"},
     {"nome": "Moda & Calçados", "url": "https://lista.mercadolivre.com.br/calcados-roupas_NoIndex_True"},
@@ -38,6 +41,9 @@ NICHOS_ESTRATEGICOS = [
     {"nome": "Beleza & Cuidados", "url": "https://lista.mercadolivre.com.br/beleza-cuidado-pessoal_NoIndex_True"},
 ]
 
+# ==============================================================
+# SELETORES CSS
+# ==============================================================
 _SELETORES = {
     "card": ["div.andes-card.poly-card", "div.poly-card", "li.promotion-item", "li.ui-search-layout__item", "div.ui-search-result__wrapper"],
     "titulo": ["a.poly-component__title", "h2.poly-component__title", "a.promotion-item__link", "h2.ui-search-item__title", "a.ui-search-link"],
@@ -131,6 +137,9 @@ def montar_link_afiliado(url_produto: str) -> Optional[str]:
     return gerar_link_afiliado(url_produto) if url_produto else None
 
 
+# ==============================================================
+# NAVEGADOR PLAYWRIGHT (Headless + Injeção de Cookies)
+# ==============================================================
 _PW = None
 _CTX = None
 _PERFIL_DIR = Path(__file__).resolve().parent.parent / "data" / "ml_profile"
@@ -144,12 +153,13 @@ def _contexto_navegador():
 
     _PW = sync_playwright().start()
     _PERFIL_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     opcoes = dict(
         user_data_dir=str(_PERFIL_DIR),
         headless=True,
         locale="pt-BR",
         viewport={"width": 1280, "height": 900},
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         args=[
             "--no-sandbox",
             "--disable-setuid-sandbox",
@@ -159,6 +169,26 @@ def _contexto_navegador():
     )
     try:
         _CTX = _PW.chromium.launch_persistent_context(**opcoes)
+
+        # Injeção dinâmica dos cookies do .env no contexto do navegador
+        cookie_header = (getattr(config, "MELI_COOKIE_HEADER", "") or "").strip()
+        if cookie_header:
+            cookies_lista = []
+            for item in cookie_header.split(";"):
+                if "=" in item:
+                    partes = item.strip().split("=", 1)
+                    if len(partes) == 2:
+                        nome, valor = partes
+                        cookies_lista.append({
+                            "name": nome.strip(),
+                            "value": valor.strip(),
+                            "domain": ".mercadolivre.com.br",
+                            "path": "/",
+                        })
+            if cookies_lista:
+                _CTX.add_cookies(cookies_lista)
+                logger.info("ML: %d cookies injetados com sucesso no Playwright a partir do .env", len(cookies_lista))
+
         logger.info("ML: navegador Chromium do Playwright iniciado com sucesso (headless=True)")
     except Exception as erro:
         logger.error("ML: falha crítica ao iniciar contexto do Playwright: %s", erro)
@@ -172,6 +202,11 @@ def _buscar_pagina_html_navegador(url: str) -> Optional[str]:
         page = ctx.new_page()
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
+
+            # Simula rolagem leve para acionar o carregamento preguiçoso (lazy loading) dos cards
+            page.evaluate("window.scrollBy(0, 500)")
+            time.sleep(1)
+
             try:
                 page.wait_for_selector(", ".join(_SELETORES["card"]), timeout=15000)
             except Exception:
@@ -237,6 +272,7 @@ def _montar_url_paginada(base_url: str, pagina: int) -> str:
 
 
 def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[int] = None) -> List[Dict]:
+    """Ponto de entrada unificado para busca de ofertas via Playwright Headless."""
     paginas_para_buscar = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 3)
     promocoes = []
     base_url = url_categoria or getattr(config, "MERCADO_LIVRE_OFERTAS_URL", f"{BASE_URL}/ofertas")
