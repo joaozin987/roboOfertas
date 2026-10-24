@@ -1,18 +1,14 @@
 """
-Camada de comunicação com o Mercado Livre (Playwright Headless + Injeção de Cookies).
+Camada de comunicação com o Mercado Livre (Versão API JSON Pública - Sem Playwright / Sem Captcha).
 """
 
 import logging
 import os
 import random
-import re
 import time
-from pathlib import Path
 from typing import Dict, List, Optional
-from urllib.parse import urljoin
 
 import requests
-from bs4 import BeautifulSoup
 
 from app import config
 from app.afiliados import gerar_link_afiliado
@@ -22,36 +18,21 @@ BASE_URL = "https://www.mercadolivre.com.br"
 
 
 def _preco_maximo() -> float:
-    """Preço máximo aceito no ML: variável ML_PRECO_MAXIMO do .env > config > 900."""
     try:
         return float(os.getenv("ML_PRECO_MAXIMO") or getattr(config, "ML_PRECO_MAXIMO", 900.0))
     except (TypeError, ValueError):
         return 900.0
 
 
-# ==============================================================
-# NICHOS ESTRATEGICOS (Listagem Direta)
-# ==============================================================
+# Nichos estratégicos mapeados para termos de busca limpos na API
 NICHOS_ESTRATEGICOS = [
-    {"nome": "Smartphones & Celulares", "url": "https://lista.mercadolivre.com.br/celulares-smartphones_NoIndex_True"},
-    {"nome": "Moda & Calçados", "url": "https://lista.mercadolivre.com.br/calcados-roupas_NoIndex_True"},
-    {"nome": "Corrida & Esportes", "url": "https://lista.mercadolivre.com.br/esportes-fitness_NoIndex_True"},
-    {"nome": "Informática & Games", "url": "https://lista.mercadolivre.com.br/informatica-games_NoIndex_True"},
-    {"nome": "Casa & Eletrodomésticos", "url": "https://lista.mercadolivre.com.br/eletrodomesticos_NoIndex_True"},
-    {"nome": "Beleza & Cuidados", "url": "https://lista.mercadolivre.com.br/beleza-cuidado-pessoal_NoIndex_True"},
+    {"nome": "Smartphones & Celulares", "termo": "celulares smartphones", "url": "https://lista.mercadolivre.com.br/celulares-smartphones_NoIndex_True"},
+    {"nome": "Moda & Calçados", "termo": "calcados roupas", "url": "https://lista.mercadolivre.com.br/calcados-roupas_NoIndex_True"},
+    {"nome": "Corrida & Esportes", "termo": "esportes fitness", "url": "https://lista.mercadolivre.com.br/esportes-fitness_NoIndex_True"},
+    {"nome": "Informática & Games", "termo": "informatica games", "url": "https://lista.mercadolivre.com.br/informatica-games_NoIndex_True"},
+    {"nome": "Casa & Eletrodomésticos", "termo": "eletrodomesticos", "url": "https://lista.mercadolivre.com.br/eletrodomesticos_NoIndex_True"},
+    {"nome": "Beleza & Cuidados", "termo": "beleza cuidado pessoal", "url": "https://lista.mercadolivre.com.br/beleza-cuidado-pessoal_NoIndex_True"},
 ]
-
-# ==============================================================
-# SELETORES CSS
-# ==============================================================
-_SELETORES = {
-    "card": ["div.andes-card.poly-card", "div.poly-card", "li.promotion-item", "li.ui-search-layout__item", "div.ui-search-result__wrapper"],
-    "titulo": ["a.poly-component__title", "h2.poly-component__title", "a.promotion-item__link", "h2.ui-search-item__title", "a.ui-search-link"],
-    "link": ["a.poly-component__title", "a.promotion-item__link", "a.ui-search-link", "a.ui-search-item__group__element"],
-    "imagem": ["img.poly-component__picture", "img.promotion-item__img", "img.ui-search-result-image__element"],
-    "preco_atual": ["div.poly-price__current span.andes-money-amount", "div.ui-search-price__second-line span.andes-money-amount", "div.ui-search-price--size-medium span.andes-money-amount"],
-    "preco_anterior": ["s.andes-money-amount--previous", "span.promotion-item__price-previous", "s.ui-search-price__part--medium", "s.ui-search-price__part"],
-}
 
 TERMOS_OBRIGATORIOS_POR_CATEGORIA = {
     "Smartphones & Celulares": ["smartphone", "celular", "iphone", "samsung", "galaxy", "xiaomi", "motorola", "moto"],
@@ -73,60 +54,6 @@ def _validar_relevancia_titulo(titulo: str, categoria_nome: str) -> bool:
     return any(termo in titulo_lower for termo in termos)
 
 
-_SESSAO = requests.Session()
-
-
-def _primeiro_texto(elemento, seletores) -> Optional[str]:
-    for seletor in seletores:
-        if (encontrado := elemento.select_one(seletor)) and (texto := encontrado.get_text(strip=True)):
-            return texto
-    return None
-
-
-def _primeiro_atributo(elemento, seletores, atributo) -> Optional[str]:
-    for seletor in seletores:
-        if (encontrado := elemento.select_one(seletor)) and encontrado.get(atributo):
-            return encontrado.get(atributo)
-    return None
-
-
-def _parse_preco(texto: Optional[str]) -> Optional[float]:
-    if not texto:
-        return None
-    m = re.search(r"(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?", texto)
-    if not m:
-        return None
-    try:
-        return float(f"{m.group(1).replace('.', '')}.{(m.group(2) or '0').ljust(2, '0')}")
-    except ValueError:
-        return None
-
-
-def _preco_do_elemento(elemento) -> Optional[float]:
-    if fracao := elemento.select_one("span.andes-money-amount__fraction"):
-        if inteiro := re.sub(r"\D", "", fracao.get_text()):
-            cents = elemento.select_one("span.andes-money-amount__cents")
-            centavos = re.sub(r"\D", "", cents.get_text())[:2] if cents else ""
-            return float(f"{inteiro}.{(centavos or '0').ljust(2, '0')}")
-    return _parse_preco(elemento.get_text(" ", strip=True))
-
-
-def _primeiro_preco(card, seletores) -> Optional[float]:
-    for seletor in seletores:
-        if (elemento := card.select_one(seletor)) and (preco := _preco_do_elemento(elemento)) is not None:
-            return preco
-    return None
-
-
-def _extrair_imagem(card) -> Optional[str]:
-    for seletor in _SELETORES["imagem"]:
-        if elemento := card.select_one(seletor):
-            for atributo in ("data-src", "src", "data-lazy"):
-                if (valor := elemento.get(atributo)) and not valor.startswith("data:"):
-                    return "https:" + valor if valor.startswith("//") else valor
-    return None
-
-
 def calcular_desconto(preco_atual: float, preco_anterior: float) -> Optional[float]:
     if not preco_anterior or preco_anterior <= 0:
         return None
@@ -137,179 +64,86 @@ def montar_link_afiliado(url_produto: str) -> Optional[str]:
     return gerar_link_afiliado(url_produto) if url_produto else None
 
 
-# ==============================================================
-# NAVEGADOR PLAYWRIGHT (Headless + Injeção de Cookies)
-# ==============================================================
-_PW = None
-_CTX = None
-_PERFIL_DIR = Path(__file__).resolve().parent.parent / "data" / "ml_profile"
-
-
-def _contexto_navegador():
-    global _PW, _CTX
-    if _CTX is not None:
-        return _CTX
-    from playwright.sync_api import sync_playwright
-
-    _PW = sync_playwright().start()
-    _PERFIL_DIR.mkdir(parents=True, exist_ok=True)
-
-    opcoes = dict(
-        user_data_dir=str(_PERFIL_DIR),
-        headless=True,
-        locale="pt-BR",
-        viewport={"width": 1280, "height": 900},
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        args=[
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled",
-        ],
-    )
-
-    # Suporte opcional a Proxy para contornar bloqueios de IP de datacenter
-    proxy_server = os.getenv("PROXY_SERVER", "").strip()
-    if proxy_server:
-        opcoes["proxy"] = {"server": proxy_server}
-        logger.info("ML: Utilizando proxy configurado para o Playwright.")
-
-    try:
-        _CTX = _PW.chromium.launch_persistent_context(**opcoes)
-
-        # Injeção dinâmica dos cookies do .env no contexto do navegador
-        cookie_header = (getattr(config, "MELI_COOKIE_HEADER", "") or "").strip()
-        if cookie_header:
-            cookies_lista = []
-            for item in cookie_header.split(";"):
-                if "=" in item:
-                    partes = item.strip().split("=", 1)
-                    if len(partes) == 2:
-                        nome, valor = partes
-                        cookies_lista.append({
-                            "name": nome.strip(),
-                            "value": valor.strip(),
-                            "domain": ".mercadolivre.com.br",
-                            "path": "/",
-                        })
-            if cookies_lista:
-                _CTX.add_cookies(cookies_lista)
-                logger.info("ML: %d cookies injetados com sucesso no Playwright a partir do .env", len(cookies_lista))
-
-        logger.info("ML: navegador Chromium do Playwright iniciado com sucesso (headless=True)")
-    except Exception as erro:
-        logger.error("ML: falha crítica ao iniciar contexto do Playwright: %s", erro)
-        raise
-    return _CTX
-
-
-def _buscar_pagina_html_navegador(url: str) -> Optional[str]:
-    try:
-        ctx = _contexto_navegador()
-        page = ctx.new_page()
-        try:
-            page.goto(url, wait_until="domcontentloaded", timeout=45000)
-
-            # Simula rolagem leve para acionar o carregamento preguiçoso (lazy loading) dos cards
-            page.evaluate("window.scrollBy(0, 500)")
-            time.sleep(1)
-
-            try:
-                page.wait_for_selector(", ".join(_SELETORES["card"]), timeout=15000)
-            except Exception:
-                logger.warning("ML: nenhum card apareceu em 15s em %s (url final: %s)", url, page.url)
-
-            html = page.content()
-            logger.info("ML NAV %s -> %d bytes (final: %s)", url, len(html), page.url)
-            return html
-        finally:
-            page.close()
-    except Exception as erro:
-        logger.error("ML: falha no navegador em %s: %s", url, erro)
-    return None
-
-
-def _obter_html(url: str) -> Optional[str]:
-    return _buscar_pagina_html_navegador(url)
-
-
-def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]:
-    titulo = _primeiro_texto(card, _SELETORES["titulo"])
-    url_produto = _primeiro_atributo(card, _SELETORES["link"], "href")
-    preco_atual = _primeiro_preco(card, _SELETORES["preco_atual"])
-    preco_anterior = _primeiro_preco(card, _SELETORES["preco_anterior"])
-
-    if not titulo or not url_produto or preco_atual is None:
-        return None
-
-    if not _validar_relevancia_titulo(titulo, categoria_nome):
-        return None
-
-    if preco_atual > _preco_maximo():
-        return None
-
-    if preco_anterior is not None and preco_anterior <= preco_atual:
-        preco_anterior = None
-
-    desconto = calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None
-
-    return {
-        "origem": "mercado_livre",
-        "titulo": titulo,
-        "categoria": categoria_nome,
-        "preco_atual": preco_atual,
-        "preco_anterior": preco_anterior,
-        "desconto": desconto,
-        "imagem": _extrair_imagem(card),
-        "url_produto": urljoin(BASE_URL, url_produto),
-        "url_afiliado": None,
-        "cupom": getattr(config, "CUPOM_DESCONTO", None),
-    }
-
-
-def _montar_url_paginada(base_url: str, pagina: int) -> str:
-    url_limpa = base_url.split("#")[0]
-    if pagina <= 1:
-        return url_limpa
-    if "lista.mercadolivre.com.br" in url_limpa:
-        desde = ((pagina - 1) * 48) + 1
-        return f"{url_limpa}_Desde_{desde}"
-    divisor = "&" if "?" in url_limpa else "?"
-    return f"{url_limpa}{divisor}page={pagina}"
-
-
 def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[int] = None) -> List[Dict]:
-    """Ponto de entrada unificado para busca de ofertas via Playwright Headless."""
+    """Busca ofertas diretamente na API JSON pública do Mercado Livre."""
     paginas_para_buscar = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 3)
     promocoes = []
-    base_url = url_categoria or getattr(config, "MERCADO_LIVRE_OFERTAS_URL", f"{BASE_URL}/ofertas")
 
-    categoria_nome = next((n["nome"] for n in NICHOS_ESTRATEGICOS if n["url"] == url_categoria), "Ofertas")
-    pagina_inicial = 1 if "lista.mercadolivre.com.br" in base_url else random.choice([1, 2])
+    # Identifica o nicho e o termo de busca correspondente
+    nicho_atual = next((n for n in NICHOS_ESTRATEGICOS if n["url"] == url_categoria), None)
+    termo_busca = nicho_atual["termo"] if nicho_atual else "ofertas"
+    categoria_nome = nicho_atual["nome"] if nicho_atual else "Ofertas"
 
-    logger.info("ML: iniciando busca [%s] | páginas=%d | preço máx R$ %s", categoria_nome, paginas_para_buscar, _preco_maximo())
+    url_api = "https://api.mercadolivre.com.br/sites/MLB/search"
+    limite_por_pagina = 50  # A API do ML aceita até 50 itens por requisição
 
-    for pagina in range(pagina_inicial, pagina_inicial + paginas_para_buscar):
-        url = _montar_url_paginada(base_url, pagina)
-        html = _obter_html(url)
-        if not html:
-            break
+    logger.info("ML API: iniciando busca [%s] (termo: '%s') | páginas=%d", categoria_nome, termo_busca, paginas_para_buscar)
 
-        soup = BeautifulSoup(html, "html.parser")
-        cards = []
-        for seletor in _SELETORES["card"]:
-            if encontrados := soup.select(seletor):
-                cards = encontrados
+    for pagina in range(paginas_para_buscar):
+        offset = pagina * limite_por_pagina
+        params = {
+            "q": termo_busca,
+            "limit": limite_por_pagina,
+            "offset": offset,
+            "condition": "new"
+        }
+
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            }
+            response = requests.get(url_api, params=params, headers=headers, timeout=15)
+
+            if response.status_code != 200:
+                logger.warning("ML API retornou status %d para o termo '%s'", response.status_code, termo_busca)
                 break
 
-        if not cards:
+            dados = response.json()
+            resultados = dados.get("results", [])
+
+            if not resultados:
+                break
+
+            for item in resultados:
+                titulo = item.get("title", "")
+                if not _validar_relevancia_titulo(titulo, categoria_nome):
+                    continue
+
+                preco_atual = float(item.get("price", 0))
+                if preco_atual <= 0 or preco_atual > _preco_maximo():
+                    continue
+
+                preco_original = item.get("original_price")
+                preco_anterior = float(preco_original) if preco_original else None
+
+                if preco_anterior is not None and preco_anterior <= preco_atual:
+                    preco_anterior = None
+
+                desconto = calcular_desconto(preco_atual, preco_anterior) if preco_anterior else None
+
+                # Garante imagem em HTTPS de boa qualidade
+                imagem = item.get("thumbnail", "").replace("http://", "https://")
+                if "I.jpg" in imagem:
+                    imagem = imagem.replace("I.jpg", "O.jpg")  # Tenta pegar versão maior se disponível
+
+                promocoes.append({
+                    "origem": "mercado_livre",
+                    "titulo": titulo,
+                    "categoria": categoria_nome,
+                    "preco_atual": preco_atual,
+                    "preco_anterior": preco_anterior,
+                    "desconto": desconto,
+                    "imagem": imagem,
+                    "url_produto": item.get("permalink", ""),
+                    "url_afiliado": None,
+                    "cupom": getattr(config, "CUPOM_DESCONTO", None),
+                })
+
+            time.sleep(getattr(config, "SCRAPER_REQUEST_DELAY_SECONDS", 2) + random.random())
+
+        except Exception as err:
+            logger.error("Erro ao consultar API JSON do Mercado Livre: %s", err, exc_info=True)
             break
 
-        for card in cards:
-            if promocao := _extrair_promocao(card, categoria_nome=categoria_nome):
-                promocoes.append(promocao)
-
-        time.sleep(getattr(config, "SCRAPER_REQUEST_DELAY_SECONDS", 2) + random.random())
-
-    logger.info("ML: %d promoções extraídas com sucesso em [%s]", len(promocoes), categoria_nome)
+    logger.info("ML API: %d promoções obtidas com sucesso em [%s]", len(promocoes), categoria_nome)
     return promocoes
