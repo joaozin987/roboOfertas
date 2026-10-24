@@ -64,7 +64,11 @@ def montar_link_afiliado(url_produto: str) -> Optional[str]:
 
 
 def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[int] = None) -> List[Dict]:
-    """Busca ofertas diretamente na API JSON pública do Mercado Livre com tratamento de DNS."""
+    """Busca ofertas diretamente na API JSON pública do Mercado Livre com estabilização de rede."""
+    
+    # Pausa de segurança na primeira execução para estabilizar o DNS do container no Railway
+    time.sleep(3)
+
     paginas_para_buscar = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 3)
     promocoes = []
 
@@ -86,16 +90,32 @@ def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[in
             "condition": "new"
         }
 
+        tentativas = 3
+        sucesso = False
+        
+        for tentativa in range(tentativas):
+            try:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                    "Accept": "application/json",
+                }
+                response = requests.get(url_api, params=params, headers=headers, timeout=20)
+
+                if response.status_code == 200:
+                    sucesso = True
+                    break
+                else:
+                    logger.warning("ML API status %d na tentativa %d", response.status_code, tentativa + 1)
+                    time.sleep(2)
+            except Exception as ce:
+                logger.warning("ML API falha de conexão (tentativa %d/%d): %s", tentativa + 1, tentativas, ce)
+                time.sleep(3)
+
+        if not sucesso:
+            logger.warning("ML API: Falha persistente de conexão/DNS para o nicho [%s]", categoria_nome)
+            break
+
         try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-            }
-            response = requests.get(url_api, params=params, headers=headers, timeout=15)
-
-            if response.status_code != 200:
-                logger.warning("ML API retornou status %d para o termo '%s'", response.status_code, termo_busca)
-                break
-
             dados = response.json()
             resultados = dados.get("results", [])
 
@@ -138,11 +158,8 @@ def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[in
 
             time.sleep(getattr(config, "SCRAPER_REQUEST_DELAY_SECONDS", 2) + random.random())
 
-        except requests.exceptions.ConnectionError as ce:
-            logger.warning("ML API: Falha de conexão/DNS ao acessar a API do Mercado Livre (tentativa %d): %s", pagina + 1, ce)
-            break
         except Exception as err:
-            logger.error("Erro inesperado ao consultar API JSON do Mercado Livre: %s", err, exc_info=True)
+            logger.error("Erro ao processar dados da API JSON do Mercado Livre: %s", err, exc_info=True)
             break
 
     logger.info("ML API: %d promoções obtidas com sucesso em [%s]", len(promocoes), categoria_nome)
