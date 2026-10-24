@@ -6,3 +6,4 @@ venv/
 data/*.db
 node_modules/
 dist/
+data/ml_profile/

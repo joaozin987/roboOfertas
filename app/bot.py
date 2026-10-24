@@ -2,7 +2,9 @@
 Orquestrador principal do bot de promoções (Modo 24/7 sem pausa noturna).
 """
 
+import json
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -21,6 +23,7 @@ _proxima_tentativa_afiliado = 0.0
 _aviso_fuso_emitido = False
 INTERVALO_RETENTATIVA_AFILIADO_S = 30 * 60
 CANDIDATOS_POR_VAGA = 3
+ML_JSON_MAX_IDADE_HORAS = 12
 
 
 def _agora() -> datetime:
@@ -144,10 +147,40 @@ def _obter_cotas_envio() -> tuple:
     return int(getattr(config, "ML_COUNT_PER_RUN", 1)), int(getattr(config, "SHOPEE_COUNT_PER_RUN", 2))
 
 
+def _ler_ofertas_ml_json() -> List[Dict]:
+    """Lê data/ml_ofertas.json (gerado pelo coletar_ml.py rodando no PC)."""
+    caminho = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "ml_ofertas.json")
+    try:
+        with open(caminho, encoding="utf-8") as f:
+            dados = json.load(f)
+    except Exception as erro:
+        logger.error("ML JSON: erro lendo %s: %s", caminho, erro)
+        return []
+
+    try:
+        gerado = datetime.fromisoformat(dados.get("gerado_em", ""))
+        idade_h = (datetime.now() - gerado).total_seconds() / 3600
+        if idade_h > ML_JSON_MAX_IDADE_HORAS:
+            logger.warning("ML JSON: arquivo com %.1f h (rode o coletar_ml.py e suba de novo)", idade_h)
+    except Exception:
+        pass
+
+    return dados.get("ofertas", [])
+
+
 def _candidatos_ml(url_categoria: Optional[str], limite: int) -> List[Dict]:
-    brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
+    if os.getenv("ML_USAR_JSON", "true").strip().lower() == "true":
+        todas = _ler_ofertas_ml_json()
+        nome = next((n["nome"] for n in mercado_livre.NICHOS_ESTRATEGICOS if n["url"] == url_categoria), None)
+        brutas = [o for o in todas if not nome or o.get("categoria") == nome]
+        logger.info("ML JSON: %d ofertas lidas [%s]", len(brutas), nome or "todas")
+    else:
+        brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
+
     ineditas = _filtrar_apenas_ineditas(brutas)
-    return promocoes.preparar_promocoes_para_publicar(ineditas, limite=limite, desconto_min=getattr(config, "MELI_MIN_DESCONTO", None))
+    return promocoes.preparar_promocoes_para_publicar(
+        ineditas, limite=limite, desconto_min=getattr(config, "MELI_MIN_DESCONTO", None)
+    )
 
 
 def _candidatos_shopee(limite: int) -> List[Dict]:
