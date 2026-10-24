@@ -167,6 +167,13 @@ def _contexto_navegador():
             "--disable-blink-features=AutomationControlled",
         ],
     )
+
+    # Suporte opcional a Proxy para contornar bloqueios de IP de datacenter
+    proxy_server = os.getenv("PROXY_SERVER", "").strip()
+    if proxy_server:
+        opcoes["proxy"] = {"server": proxy_server}
+        logger.info("ML: Utilizando proxy configurado para o Playwright.")
+
     try:
         _CTX = _PW.chromium.launch_persistent_context(**opcoes)
 
