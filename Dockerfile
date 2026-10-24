@@ -27,11 +27,11 @@ RUN apt-get update && apt-get install -y \
     libasound2-data \
     && rm -rf /var/lib/apt/lists/*
 
-# Copia os arquivos de dependência e instala os pacotes Python
+# Copia os arquivos de dependência e instala os pacotes Python PRIMEIRO
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Instala o navegador Chromium do Playwright e suas dependências de sistema
+# AGORA o pacote playwright está instalado e o binário pode ser executado
 RUN playwright install chromium
 RUN playwright install-deps chromium
 
