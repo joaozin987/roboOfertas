@@ -1,5 +1,5 @@
 """
-Camada de comunicação com o Mercado Livre (Versão Playwright Headless + Cookies de Sessão).
+Camada de comunicação com o Mercado Livre (Versão Playwright Headless + Listagem Direta).
 """
 
 import logging
@@ -8,7 +8,7 @@ import random
 import re
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from urllib.parse import urljoin
 
 import requests
@@ -22,19 +22,13 @@ BASE_URL = "https://www.mercadolivre.com.br"
 
 
 def _preco_maximo() -> float:
-    """Preço máximo aceito no ML: variável ML_PRECO_MAXIMO do .env > config > 900."""
     try:
         return float(os.getenv("ML_PRECO_MAXIMO") or getattr(config, "ML_PRECO_MAXIMO", 900.0))
     except (TypeError, ValueError):
         return 900.0
 
 
-# ==============================================================
-# NICHOS ESTRATEGICOS
-# ==============================================================
-# ==============================================================
-# NICHOS ESTRATEGICOS (URLs de Listagem Direta para evitar bloqueio Headless)
-# ==============================================================
+# Nichos estratégicos apontando para listagem de busca direta (evita bloqueio no Railway)
 NICHOS_ESTRATEGICOS = [
     {"nome": "Smartphones & Celulares", "url": "https://lista.mercadolivre.com.br/celulares-smartphones_NoIndex_True"},
     {"nome": "Moda & Calçados", "url": "https://lista.mercadolivre.com.br/calcados-roupas_NoIndex_True"},
@@ -44,9 +38,6 @@ NICHOS_ESTRATEGICOS = [
     {"nome": "Beleza & Cuidados", "url": "https://lista.mercadolivre.com.br/beleza-cuidado-pessoal_NoIndex_True"},
 ]
 
-# ==============================================================
-# SELETORES CSS
-# ==============================================================
 _SELETORES = {
     "card": ["div.andes-card.poly-card", "div.poly-card", "li.promotion-item", "li.ui-search-layout__item", "div.ui-search-result__wrapper"],
     "titulo": ["a.poly-component__title", "h2.poly-component__title", "a.promotion-item__link", "h2.ui-search-item__title", "a.ui-search-link"],
@@ -63,8 +54,6 @@ TERMOS_OBRIGATORIOS_POR_CATEGORIA = {
     "Informática & Games": ["notebook", "laptop", "placa de vídeo", "processador", "monitor", "teclado", "mouse", "headset", "ssd", "gamer"],
     "Casa & Eletrodomésticos": ["air fryer", "liquidificador", "aspirador", "panela", "ventilador", "cafeteira", "micro-ondas"],
     "Beleza & Cuidados": ["perfume", "colônia", "desodorante", "creme", "shampoo", "secador", "prancha"],
-    "Perfumes Árabes Hype": ["lattafa", "armaf", "rasasi", "al haramain", "perfume", "eau de", "colônia", "asado", "yara", "khamrah", "club de nuit", "fakhar", "hawas"],
-    "Perfumaria Nacional Top": ["boticario", "boticário", "natura", "malbec", "egeo", "kaiak", "essencial", "humor", "perfume", "colônia", "ekos", "quasar", "floratta"],
 }
 
 
@@ -142,9 +131,6 @@ def montar_link_afiliado(url_produto: str) -> Optional[str]:
     return gerar_link_afiliado(url_produto) if url_produto else None
 
 
-# ==============================================================
-# NAVEGADOR PLAYWRIGHT (Headless + Volume Persistido)
-# ==============================================================
 _PW = None
 _CTX = None
 _PERFIL_DIR = Path(__file__).resolve().parent.parent / "data" / "ml_profile"
@@ -159,12 +145,9 @@ def _contexto_navegador():
     _PW = sync_playwright().start()
     _PERFIL_DIR.mkdir(parents=True, exist_ok=True)
     
-    # Forçado como True para rodar perfeitamente no Railway sem interface gráfica
-    headless = True
-    
     opcoes = dict(
         user_data_dir=str(_PERFIL_DIR),
-        headless=headless,
+        headless=True,
         locale="pt-BR",
         viewport={"width": 1280, "height": 900},
         args=[
@@ -176,7 +159,7 @@ def _contexto_navegador():
     )
     try:
         _CTX = _PW.chromium.launch_persistent_context(**opcoes)
-        logger.info("ML: navegador Chromium do Playwright iniciado com sucesso (headless=%s)", headless)
+        logger.info("ML: navegador Chromium do Playwright iniciado com sucesso (headless=True)")
     except Exception as erro:
         logger.error("ML: falha crítica ao iniciar contexto do Playwright: %s", erro)
         raise
@@ -189,7 +172,6 @@ def _buscar_pagina_html_navegador(url: str) -> Optional[str]:
         page = ctx.new_page()
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
-
             try:
                 page.wait_for_selector(", ".join(_SELETORES["card"]), timeout=15000)
             except Exception:
@@ -205,34 +187,8 @@ def _buscar_pagina_html_navegador(url: str) -> Optional[str]:
     return None
 
 
-def _buscar_pagina_html_fallback(url: str, tentativas: int = 3) -> Optional[str]:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-    }
-    cookie = (getattr(config, "MELI_COOKIE_HEADER", "") or "").strip()
-    if cookie:
-        headers["Cookie"] = cookie
-
-    for tentativa in range(1, tentativas + 1):
-        try:
-            resposta = _SESSAO.get(url, headers=headers, timeout=20, allow_redirects=True)
-            if resposta.status_code == 200 and "captcha" not in resposta.url:
-                return resposta.text
-            logger.warning("ML Fallback: status %s ou captcha em %s", resposta.status_code, resposta.url)
-        except requests.RequestException as erro:
-            logger.warning("ML Fallback erro de rede em %s: %s", url, erro)
-        time.sleep(2 * tentativa)
-    return None
-
-
 def _obter_html(url: str) -> Optional[str]:
-    html = _buscar_pagina_html_navegador(url)
-    if html and "captcha" not in html.lower():
-        return html
-    logger.warning("ML: navegador bloqueado ou sem HTML; tentando fallback HTTP.")
-    return _buscar_pagina_html_fallback(url)
+    return _buscar_pagina_html_navegador(url)
 
 
 def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]:
@@ -247,8 +203,7 @@ def _extrair_promocao(card, categoria_nome: str = "Destaques") -> Optional[dict]
     if not _validar_relevancia_titulo(titulo, categoria_nome):
         return None
 
-    preco_maximo = _preco_maximo()
-    if preco_atual > preco_maximo:
+    if preco_atual > _preco_maximo():
         return None
 
     if preco_anterior is not None and preco_anterior <= preco_atual:
@@ -282,7 +237,6 @@ def _montar_url_paginada(base_url: str, pagina: int) -> str:
 
 
 def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[int] = None) -> List[Dict]:
-    """Ponto de entrada unificado para busca de ofertas via Playwright Headless."""
     paginas_para_buscar = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 3)
     promocoes = []
     base_url = url_categoria or getattr(config, "MERCADO_LIVRE_OFERTAS_URL", f"{BASE_URL}/ofertas")
@@ -290,10 +244,7 @@ def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[in
     categoria_nome = next((n["nome"] for n in NICHOS_ESTRATEGICOS if n["url"] == url_categoria), "Ofertas")
     pagina_inicial = 1 if "lista.mercadolivre.com.br" in base_url else random.choice([1, 2])
 
-    logger.info(
-        "ML: iniciando busca [%s] | páginas=%d | preço máx R$ %s",
-        categoria_nome, paginas_para_buscar, _preco_maximo(),
-    )
+    logger.info("ML: iniciando busca [%s] | páginas=%d | preço máx R$ %s", categoria_nome, paginas_para_buscar, _preco_maximo())
 
     for pagina in range(pagina_inicial, pagina_inicial + paginas_para_buscar):
         url = _montar_url_paginada(base_url, pagina)
