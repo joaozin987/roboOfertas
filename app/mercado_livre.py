@@ -32,13 +32,16 @@ def _preco_maximo() -> float:
 # ==============================================================
 # NICHOS ESTRATEGICOS
 # ==============================================================
+# ==============================================================
+# NICHOS ESTRATEGICOS (URLs de Listagem Direta para evitar bloqueio Headless)
+# ==============================================================
 NICHOS_ESTRATEGICOS = [
-    {"nome": "Smartphones & Celulares", "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1051"},
-    {"nome": "Moda & Calçados", "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1430"},
-    {"nome": "Corrida & Esportes", "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1276"},
-    {"nome": "Informática & Games", "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1648"},
-    {"nome": "Casa & Eletrodomésticos", "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1574"},
-    {"nome": "Beleza & Cuidados", "url": "https://www.mercadolivre.com.br/ofertas?category=MLB1246"},
+    {"nome": "Smartphones & Celulares", "url": "https://lista.mercadolivre.com.br/celulares-smartphones_NoIndex_True"},
+    {"nome": "Moda & Calçados", "url": "https://lista.mercadolivre.com.br/calcados-roupas_NoIndex_True"},
+    {"nome": "Corrida & Esportes", "url": "https://lista.mercadolivre.com.br/esportes-fitness_NoIndex_True"},
+    {"nome": "Informática & Games", "url": "https://lista.mercadolivre.com.br/informatica-games_NoIndex_True"},
+    {"nome": "Casa & Eletrodomésticos", "url": "https://lista.mercadolivre.com.br/eletrodomesticos_NoIndex_True"},
+    {"nome": "Beleza & Cuidados", "url": "https://lista.mercadolivre.com.br/beleza-cuidado-pessoal_NoIndex_True"},
 ]
 
 # ==============================================================
