@@ -30,12 +30,28 @@ def _preco_maximo() -> float:
 
 
 NICHOS_ESTRATEGICOS = [
+    # --- nichos originais ---
     {"nome": "Smartphones & Celulares", "url": "https://lista.mercadolivre.com.br/celulares-smartphones_NoIndex_True"},
     {"nome": "Moda & Calçados", "url": "https://lista.mercadolivre.com.br/calcados-roupas_NoIndex_True"},
     {"nome": "Corrida & Esportes", "url": "https://lista.mercadolivre.com.br/esportes-fitness_NoIndex_True"},
     {"nome": "Informática & Games", "url": "https://lista.mercadolivre.com.br/informatica-games_NoIndex_True"},
     {"nome": "Casa & Eletrodomésticos", "url": "https://lista.mercadolivre.com.br/eletrodomesticos_NoIndex_True"},
     {"nome": "Beleza & Cuidados", "url": "https://lista.mercadolivre.com.br/beleza-cuidado-pessoal_NoIndex_True"},
+    # --- novos nichos ---
+    {"nome": "Perfumes & Fragrâncias", "url": "https://lista.mercadolivre.com.br/perfumes_NoIndex_True"},
+    {"nome": "Maquiagem & Skincare", "url": "https://lista.mercadolivre.com.br/maquiagem_NoIndex_True"},
+    {"nome": "Relógios & Acessórios", "url": "https://lista.mercadolivre.com.br/relogios_NoIndex_True"},
+    {"nome": "Áudio & Fones", "url": "https://lista.mercadolivre.com.br/fone-bluetooth_NoIndex_True"},
+    {"nome": "Brinquedos & Infantil", "url": "https://lista.mercadolivre.com.br/brinquedos_NoIndex_True"},
+    {"nome": "Bebê & Maternidade", "url": "https://lista.mercadolivre.com.br/bebe_NoIndex_True"},
+    {"nome": "Pet Shop", "url": "https://lista.mercadolivre.com.br/pet-shop_NoIndex_True"},
+    {"nome": "Ferramentas & Construção", "url": "https://lista.mercadolivre.com.br/ferramentas_NoIndex_True"},
+    {"nome": "Automotivo", "url": "https://lista.mercadolivre.com.br/acessorios-automotivos_NoIndex_True"},
+    {"nome": "Cozinha & Utensílios", "url": "https://lista.mercadolivre.com.br/utensilios-cozinha_NoIndex_True"},
+    {"nome": "Cama, Mesa & Banho", "url": "https://lista.mercadolivre.com.br/cama-mesa-banho_NoIndex_True"},
+    {"nome": "Móveis & Decoração", "url": "https://lista.mercadolivre.com.br/decoracao-casa_NoIndex_True"},
+    {"nome": "Suplementos & Saúde", "url": "https://lista.mercadolivre.com.br/suplementos_NoIndex_True"},
+    {"nome": "Segurança & Casa Inteligente", "url": "https://lista.mercadolivre.com.br/camera-seguranca_NoIndex_True"},
 ]
 
 _SELETORES = {
@@ -48,13 +64,37 @@ _SELETORES = {
 }
 
 TERMOS_OBRIGATORIOS_POR_CATEGORIA = {
+    # --- nichos originais (perfume e suplementos saíram daqui para não duplicar) ---
     "Smartphones & Celulares": ["smartphone", "celular", "iphone", "samsung", "galaxy", "xiaomi", "motorola", "moto"],
     "Moda & Calçados": ["tênis", "sapato", "camisa", "camiseta", "calça", "bermuda", "sandália", "chinelo", "mochila"],
-    "Corrida & Esportes": ["tênis", "corrida", "esporte", "academia", "treino", "chuteira", "bicicleta", "whey", "creatina", "suplemento"],
+    "Corrida & Esportes": ["tênis", "corrida", "esporte", "academia", "treino", "chuteira", "bicicleta"],
     "Informática & Games": ["notebook", "laptop", "placa de vídeo", "processador", "monitor", "teclado", "mouse", "headset", "ssd", "gamer"],
     "Casa & Eletrodomésticos": ["air fryer", "liquidificador", "aspirador", "panela", "ventilador", "cafeteira", "micro-ondas"],
-    "Beleza & Cuidados": ["perfume", "colônia", "desodorante", "creme", "shampoo", "secador", "prancha"],
+    "Beleza & Cuidados": ["desodorante", "creme", "shampoo", "condicionador", "secador", "prancha", "barbeador", "escova"],
+    # --- novos nichos ---
+    "Perfumes & Fragrâncias": ["perfume", "colônia", "colonia", "eau de parfum", "eau de toilette", "parfum", "toilette", "fragrância", "fragrancia", "body splash"],
+    "Maquiagem & Skincare": ["maquiagem", "batom", "base líquida", "base liquida", "rímel", "rimel", "máscara de cílios", "paleta", "sombra", "corretivo", "gloss", "protetor solar", "sérum", "serum", "hidratante", "skincare"],
+    "Relógios & Acessórios": ["relógio", "relogio", "smartwatch", "pulseira", "óculos", "oculos", "carteira", "cinto", "bolsa"],
+    "Áudio & Fones": ["fone", "headphone", "earbuds", "caixa de som", "soundbar", "bluetooth", "jbl", "airpods"],
+    "Brinquedos & Infantil": ["brinquedo", "boneca", "carrinho", "lego", "quebra-cabeça", "quebra-cabeca", "pelúcia", "pelucia", "bloco", "infantil", "massinha"],
+    "Bebê & Maternidade": ["bebê", "bebe", "fralda", "mamadeira", "berço", "berco", "chupeta", "babá eletrônica", "enxoval", "carrinho de bebê"],
+    "Pet Shop": ["ração", "racao", "pet", "cachorro", "gato", "coleira", "petisco", "areia higiênica", "areia higienica", "cama pet"],
+    "Ferramentas & Construção": ["furadeira", "parafusadeira", "chave", "alicate", "serra", "esmerilhadeira", "lixadeira", "jogo de ferramentas", "maleta", "trena"],
+    "Automotivo": ["automotivo", "veicular", "carro", "pneu", "óleo", "oleo", "farol", "limpador", "tapete", "capacete", "moto"],
+    "Cozinha & Utensílios": ["panela", "frigideira", "faca", "pote", "marmita", "garrafa térmica", "garrafa termica", "copo", "assadeira", "tábua", "tabua", "organizador", "kit"],
+    "Cama, Mesa & Banho": ["lençol", "lencol", "edredom", "cobertor", "toalha", "travesseiro", "colcha", "fronha", "manta", "jogo de cama"],
+    "Móveis & Decoração": ["decoração", "decoracao", "quadro", "luminária", "luminaria", "espelho", "prateleira", "estante", "cadeira", "poltrona", "rack", "sofá", "sofa", "puff"],
+    "Suplementos & Saúde": ["whey", "creatina", "vitamina", "colágeno", "colageno", "ômega", "omega", "pré-treino", "pre-treino", "proteína", "proteina", "multivitamínico", "bcaa", "suplemento"],
+    "Segurança & Casa Inteligente": ["câmera", "camera", "wifi", "wi-fi", "fechadura", "inteligente", "sensor", "alarme", "interfone", "smart"],
 }
+
+
+def _termo_no_titulo(termo: str, titulo_lower: str) -> bool:
+    # Termos curtos (até 4 letras) só valem como palavra inteira, aceitando plural:
+    # evita "pet" casar com "tapete" ou "kit" com "skit".
+    if len(termo) <= 4:
+        return re.search(rf"(?<!\w){re.escape(termo)}(?:s|es)?(?!\w)", titulo_lower) is not None
+    return termo in titulo_lower
 
 
 def _validar_relevancia_titulo(titulo: str, categoria_nome: str) -> bool:
@@ -64,7 +104,7 @@ def _validar_relevancia_titulo(titulo: str, categoria_nome: str) -> bool:
     termos = TERMOS_OBRIGATORIOS_POR_CATEGORIA.get(categoria_nome, [])
     if not termos:
         return True
-    return any(termo in titulo_lower for termo in termos)
+    return any(_termo_no_titulo(termo, titulo_lower) for termo in termos)
 
 
 def _primeiro_texto(elemento, seletores) -> Optional[str]:
@@ -180,6 +220,10 @@ def _montar_url_paginada(base_url: str, pagina: int) -> str:
         return url_limpa
     if "lista.mercadolivre.com.br" in url_limpa:
         desde = ((pagina - 1) * 48) + 1
+        sufixo = "_NoIndex_True"
+        if url_limpa.endswith(sufixo):
+            # Formato do próprio site: ..._Desde_49_NoIndex_True
+            return f"{url_limpa[:-len(sufixo)]}_Desde_{desde}{sufixo}"
         return f"{url_limpa}_Desde_{desde}"
     divisor = "&" if "?" in url_limpa else "?"
     return f"{url_limpa}{divisor}page={pagina}"
@@ -189,6 +233,7 @@ def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[in
     """Busca ofertas no Mercado Livre via requisições HTTP requests + cookies injetados."""
     paginas_para_buscar = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 3)
     promocoes = []
+    vistos = set()
     base_url = url_categoria or getattr(config, "MERCADO_LIVRE_OFERTAS_URL", f"{BASE_URL}/ofertas")
 
     categoria_nome = next((n["nome"] for n in NICHOS_ESTRATEGICOS if n["url"] == url_categoria), "Ofertas")
@@ -220,6 +265,11 @@ def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[in
 
             for card in cards:
                 if promocao := _extrair_promocao(card, categoria_nome=categoria_nome):
+                    # Evita o mesmo produto repetido entre páginas (ignora parâmetros de rastreio)
+                    chave = promocao["url_produto"].split("?")[0].split("#")[0]
+                    if chave in vistos:
+                        continue
+                    vistos.add(chave)
                     promocoes.append(promocao)
 
             time.sleep(getattr(config, "SCRAPER_REQUEST_DELAY_SECONDS", 2) + random.random())
