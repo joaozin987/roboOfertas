@@ -10,7 +10,7 @@ import logging
 import os
 import time
 from typing import Optional
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import parse_qs, unquote, urlparse, urlunparse
 
 import requests
 
@@ -30,6 +30,29 @@ def sessao_expirada() -> bool:
 
 def _cfg(chave: str, padrao: str = "") -> str:
     return getattr(config, chave, None) or os.getenv(chave, padrao)
+
+
+def _url_real_ml(url: str) -> Optional[str]:
+    """
+    Troca links de rastreio de anúncios (click1.mercadolivre.com.br/mclics/...)
+    pela URL real do produto, que fica dentro do parâmetro `url=`.
+    Devolve None se o link de rastreio não trouxer o destino ou se não for do Mercado Livre.
+    """
+    if not url:
+        return None
+    partes = urlparse(url.strip())
+    if "/mclics/" in partes.path or partes.netloc.lower().startswith("click"):
+        destino = (parse_qs(partes.query).get("url") or [None])[0]
+        if not destino:
+            return None
+        if destino.lower().startswith(("http%", "https%")):  # codificado duas vezes
+            destino = unquote(destino)
+        partes = urlparse(destino)
+        if "/mclics/" in partes.path or partes.netloc.lower().startswith("click"):
+            return None
+    if not partes.netloc.lower().endswith("mercadolivre.com.br"):
+        return None
+    return partes._replace(fragment="").geturl()
 
 
 def limpar_url(url: str) -> str:
@@ -57,9 +80,13 @@ def gerar_link_afiliado(url_produto: str, usar_link_curto: bool = True) -> Optio
         )
         return None
 
-    url_limpa = limpar_url(url_produto)
-    if not url_limpa:
+    # Resolve links de rastreio de anúncios ANTES de limpar a URL
+    # (a limpeza apaga o parâmetro url= onde está o produto de verdade)
+    url_real = _url_real_ml(url_produto)
+    if not url_real:
+        logger.warning("Afiliado ML: link de rastreio sem destino, produto descartado.")
         return None
+    url_limpa = limpar_url(url_real)
 
     headers = {
         "accept": "application/json, text/plain, */*",
