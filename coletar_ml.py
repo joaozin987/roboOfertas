@@ -9,8 +9,8 @@ Uso:
     python coletar_ml.py 3            # todos os nichos, 3 páginas cada
 
 Instalação (uma vez):
-    pip install playwright
-    playwright install chromium
+    python -m pip install -r requirements.txt
+    python -m playwright install chromium
 """
 
 import json
