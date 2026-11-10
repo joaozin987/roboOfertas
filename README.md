@@ -155,8 +155,14 @@ Quando quiser publicar de verdade no canal, defina `TEST_MODE=false` no
 | `MERCADO_LIVRE_CLIENT_SECRET`  | Não (Fase 3)           | Usado apenas a partir da integração com o Mercado Livre           |
 | `AFILIADO_ID`                  | Não (Fase 3+)          | Identificador de afiliado usado ao montar os links               |
 | `CUPOM_DESCONTO`               | Não (Fase 3+)          | Cupom padrão a ser exibido nas mensagens, se aplicável            |
-| `CHECK_INTERVAL_MINUTES`       | Não (Fase 6)           | Intervalo entre execuções automáticas                             |
+| `CHECK_INTERVAL_MINUTES`       | Não (Fase 6)           | Intervalo entre rodadas automáticas                                |
+| `ROUND_ALERT_MINUTES_BEFORE`   | Não (padrão `1`)       | Minutos de antecedência do aviso da próxima rodada                  |
 | `MAX_PROMOTIONS_PER_RUN`       | Não (Fase 4+)          | Limite de promoções publicadas por execução                       |
+
+Ao final de cada rodada, o bot avisa que ela terminou e informa quando a
+próxima começará. Também envia um lembrete antes da próxima rodada, pelo
+Telegram e pelo WhatsApp configurados. O prazo do lembrete pode ser alterado
+com `ROUND_ALERT_MINUTES_BEFORE`.
 
 ---
 

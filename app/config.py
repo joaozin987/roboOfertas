@@ -102,6 +102,7 @@ MAX_PROMOTIONS_PER_RUN = _get_int("MAX_PROMOTIONS_PER_RUN", 3)
 ML_COUNT_PER_RUN = _get_int("ML_COUNT_PER_RUN", 1)
 SHOPEE_COUNT_PER_RUN = _get_int("SHOPEE_COUNT_PER_RUN", 2)
 CHECK_INTERVAL_MINUTES = _get_int("CHECK_INTERVAL_MINUTES", 4)
+ROUND_ALERT_MINUTES_BEFORE = _get_int("ROUND_ALERT_MINUTES_BEFORE", 1)
 
 # Modo noturno: não publica entre INICIO (inclusive) e FIM (exclusive), no fuso TIMEZONE.
 # Para desligar, deixe os dois iguais (ex.: 0 e 0).
