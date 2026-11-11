@@ -229,6 +229,11 @@ def _montar_url_paginada(base_url: str, pagina: int) -> str:
     return f"{url_limpa}{divisor}page={pagina}"
 
 
+def _url_indica_verificacao(url: str) -> bool:
+    url_lower = url.lower()
+    return any(indicador in url_lower for indicador in ("account-verification", "captcha", "/login", "/gz/"))
+
+
 def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[int] = None) -> List[Dict]:
     """Busca ofertas no Mercado Livre via requisições HTTP requests + cookies injetados."""
     paginas_para_buscar = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 3)
@@ -246,6 +251,12 @@ def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[in
         url = _montar_url_paginada(base_url, pagina)
         try:
             response = requests.get(url, headers=headers, timeout=20)
+            if _url_indica_verificacao(response.url):
+                logger.warning(
+                    "ML HTTP: acesso redirecionado para verificação de conta; "
+                    "use coletar_ml.py no navegador para atualizar as ofertas."
+                )
+                break
             if response.status_code != 200:
                 logger.warning("ML HTTP status %d em %s", response.status_code, url)
                 break
@@ -260,7 +271,11 @@ def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[in
                     break
 
             if not cards:
-                logger.warning("ML HTTP: nenhum card encontrado em %s (possível bloqueio/captcha; %d bytes)", url, len(html))
+                logger.warning(
+                    "ML HTTP: nenhum card encontrado em %s (possível mudança de página ou bloqueio; %d bytes)",
+                    url,
+                    len(html),
+                )
                 break
 
             for card in cards:

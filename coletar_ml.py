@@ -61,69 +61,103 @@ def coletar(max_paginas: int) -> list:
     PERFIL.mkdir(parents=True, exist_ok=True)
     todas, vistos = [], set()
 
-    with sync_playwright() as pw:
-        contexto = pw.chromium.launch_persistent_context(
-            user_data_dir=str(PERFIL),
-            headless=False,  # janela visível: necessário para resolver captcha
-            locale="pt-BR",
-            viewport={"width": 1366, "height": 850},
-            args=["--disable-blink-features=AutomationControlled"],
-        )
-        page = contexto.pages[0] if contexto.pages else contexto.new_page()
+    try:
+        with sync_playwright() as pw:
+            contexto = pw.chromium.launch_persistent_context(
+                user_data_dir=str(PERFIL),
+                headless=False,  # janela visível: necessário para resolver captcha
+                locale="pt-BR",
+                viewport={"width": 1366, "height": 850},
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            try:
+                page = contexto.pages[0] if contexto.pages else contexto.new_page()
 
-        for nicho in ml.NICHOS_ESTRATEGICOS:
-            nome, base = nicho["nome"], nicho["url"]
-            print(f"\n=== {nome} ===")
-            for pagina in range(1, max_paginas + 1):
-                url = ml._montar_url_paginada(base, pagina)
-                try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                except Exception as e:
-                    print(f"  pág {pagina}: erro ao abrir ({e})")
-                    break
+                bloqueado = False
+                for nicho in ml.NICHOS_ESTRATEGICOS:
+                    nome, base = nicho["nome"], nicho["url"]
+                    print(f"\n=== {nome} ===")
+                    for pagina in range(1, max_paginas + 1):
+                        url = ml._montar_url_paginada(base, pagina)
+                        try:
+                            page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                        except Exception as e:
+                            print(f"  pág {pagina}: erro ao abrir ({e})")
+                            break
 
-                if not _aguardar_liberacao(page, url):
-                    print("  captcha não resolvido a tempo; pulando nicho")
-                    break
-                if _tem_bloqueio(page.url) is False and page.url.split("?")[0] != url.split("?")[0] and "mercadolivre" not in page.url:
-                    break
+                        if not _aguardar_liberacao(page, url):
+                            print("  verificação não resolvida; encerrando a coleta")
+                            bloqueado = True
+                            break
+                        if _tem_bloqueio(page.url) is False and page.url.split("?")[0] != url.split("?")[0] and "mercadolivre" not in page.url:
+                            break
 
-                try:
-                    page.wait_for_selector(SELETOR_CARDS, timeout=15000)
-                except Exception:
-                    print(f"  pág {pagina}: nenhum card apareceu; encerrando nicho")
-                    break
+                        try:
+                            page.wait_for_selector(SELETOR_CARDS, timeout=15000)
+                        except Exception:
+                            print(f"  pág {pagina}: nenhum card apareceu; encerrando nicho")
+                            break
 
-                # rolagem para carregar imagens preguiçosas
-                for _ in range(4):
-                    page.mouse.wheel(0, 1500)
-                    time.sleep(0.6)
+                        # rolagem para carregar imagens preguiçosas
+                        for _ in range(4):
+                            page.mouse.wheel(0, 1500)
+                            time.sleep(0.6)
 
-                soup = BeautifulSoup(page.content(), "html.parser")
-                cards = []
-                for sel in ml._SELETORES["card"]:
-                    if achados := soup.select(sel):
-                        cards = achados
+                        soup = BeautifulSoup(page.content(), "html.parser")
+                        cards = []
+                        for sel in ml._SELETORES["card"]:
+                            if achados := soup.select(sel):
+                                cards = achados
+                                break
+
+                        novos = 0
+                        for card in cards:
+                            promo = ml._extrair_promocao(card, categoria_nome=nome)
+                            if promo and promo["url_produto"] not in vistos:
+                                vistos.add(promo["url_produto"])
+                                todas.append(promo)
+                                novos += 1
+                        print(f"  pág {pagina}: {len(cards)} cards, {novos} aproveitados")
+                        time.sleep(3 + random.random() * 2)
+
+                    if bloqueado:
                         break
+            finally:
+                contexto.close()
+    except KeyboardInterrupt:
+        print(f"\nColeta interrompida. Salvando {len(todas)} ofertas coletadas até agora.")
 
-                novos = 0
-                for card in cards:
-                    promo = ml._extrair_promocao(card, categoria_nome=nome)
-                    if promo and promo["url_produto"] not in vistos:
-                        vistos.add(promo["url_produto"])
-                        todas.append(promo)
-                        novos += 1
-                print(f"  pág {pagina}: {len(cards)} cards, {novos} aproveitados")
-                time.sleep(3 + random.random() * 2)
-
-        contexto.close()
     return todas
+
+
+def salvar_ofertas(ofertas: list) -> None:
+    if not ofertas:
+        raise RuntimeError("Nenhuma oferta coletada; o arquivo atual foi preservado.")
+
+    SAIDA.parent.mkdir(parents=True, exist_ok=True)
+    temporario = SAIDA.with_name(f"{SAIDA.name}.tmp")
+    try:
+        with open(temporario, "w", encoding="utf-8") as f:
+            json.dump(
+                {"gerado_em": datetime.now().isoformat(), "ofertas": ofertas},
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+        os.replace(temporario, SAIDA)
+    except Exception:
+        if temporario.exists():
+            temporario.unlink()
+        raise
 
 
 if __name__ == "__main__":
     paginas = int(sys.argv[1]) if len(sys.argv) > 1 else 5
-    ofertas = coletar(paginas)
-    SAIDA.parent.mkdir(parents=True, exist_ok=True)
-    with open(SAIDA, "w", encoding="utf-8") as f:
-        json.dump({"gerado_em": datetime.now().isoformat(), "ofertas": ofertas}, f, ensure_ascii=False, indent=2)
+    if paginas < 1:
+        raise SystemExit("Informe pelo menos uma página para coletar.")
+    try:
+        ofertas = coletar(paginas)
+        salvar_ofertas(ofertas)
+    except RuntimeError as erro:
+        raise SystemExit(str(erro)) from erro
     print(f"\n{len(ofertas)} ofertas salvas em {SAIDA}")

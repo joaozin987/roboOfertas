@@ -159,11 +159,19 @@ def _ler_ofertas_ml_json() -> List[Dict]:
 
     try:
         gerado = datetime.fromisoformat(dados.get("gerado_em", ""))
-        idade_h = (datetime.now() - gerado).total_seconds() / 3600
-        if idade_h > ML_JSON_MAX_IDADE_HORAS:
-            logger.warning("ML JSON: arquivo com %.1f h (rode o coletar_ml.py e suba de novo)", idade_h)
-    except Exception:
-        pass
+        agora = datetime.now(gerado.tzinfo) if gerado.tzinfo else datetime.now()
+        idade_h = (agora - gerado).total_seconds() / 3600
+    except (TypeError, ValueError):
+        logger.warning("ML JSON: data de geração ausente ou inválida; ignorando arquivo.")
+        return []
+
+    if idade_h < 0 or idade_h > ML_JSON_MAX_IDADE_HORAS:
+        logger.warning(
+            "ML JSON: arquivo vencido (%.1f h; limite %d h); tentando busca atual.",
+            idade_h,
+            ML_JSON_MAX_IDADE_HORAS,
+        )
+        return []
 
     return dados.get("ofertas", [])
 
@@ -171,9 +179,20 @@ def _ler_ofertas_ml_json() -> List[Dict]:
 def _candidatos_ml(url_categoria: Optional[str], limite: int) -> List[Dict]:
     if os.getenv("ML_USAR_JSON", "true").strip().lower() == "true":
         todas = _ler_ofertas_ml_json()
-        nome = next((n["nome"] for n in mercado_livre.NICHOS_ESTRATEGICOS if n["url"] == url_categoria), None)
-        brutas = [o for o in todas if not nome or o.get("categoria") == nome]
-        logger.info("ML JSON: %d ofertas lidas [%s]", len(brutas), nome or "todas")
+        if todas:
+            nome = next((n["nome"] for n in mercado_livre.NICHOS_ESTRATEGICOS if n["url"] == url_categoria), None)
+            brutas = [o for o in todas if not nome or o.get("categoria") == nome]
+            if brutas:
+                logger.info("ML JSON: %d ofertas lidas [%s]", len(brutas), nome or "todas")
+            else:
+                logger.warning(
+                    "ML JSON: nenhuma oferta para [%s]; tentando busca direta no Mercado Livre.",
+                    nome or "todas",
+                )
+                brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
+        else:
+            logger.warning("ML JSON: sem ofertas atuais; tentando busca direta no Mercado Livre.")
+            brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
     else:
         brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
 
@@ -210,47 +229,10 @@ def _publicar_lote(candidatos: List[Dict], cota: int, limite_global: int, delay_
     return enviadas
 
 
-def _notificar_canais(mensagem: str) -> None:
-    sucessos = []
-    for nome, canal in (("Telegram", telegram), ("WhatsApp", whatsapp)):
-        enviar = getattr(canal, "enviar_mensagem", None)
-        if not enviar:
-            continue
-        try:
-            if enviar(mensagem):
-                sucessos.append(nome)
-        except RuntimeError as erro:
-            logger.error("Não foi possível enviar o aviso pelo %s: %s", nome, erro)
-
-    if not sucessos:
-        logger.error("O aviso da rodada não foi enviado por nenhum canal.")
-
-
-def _aguardar_proxima_rodada(intervalo_min: int, proximo_nicho: str) -> None:
-    inicio_espera = time.monotonic()
+def _aguardar_proxima_rodada(intervalo_min: int) -> None:
     intervalo_min = max(0, int(intervalo_min))
-    intervalo_segundos = intervalo_min * 60
-    aviso_min = max(0, int(getattr(config, "ROUND_ALERT_MINUTES_BEFORE", 1)))
-    aviso_segundos = min(aviso_min * 60, intervalo_segundos)
-
-    logger.info("Aguardando %d minutos. Próximo nicho na fila: [%s]", intervalo_min, proximo_nicho)
-    _notificar_canais(
-        f"✅ Rodada concluída. A próxima rodada de ofertas começa em "
-        f"{intervalo_min} minuto(s). Próximo nicho: {proximo_nicho}."
-    )
-
-    if aviso_segundos:
-        tempo_ate_aviso = max(
-            0, intervalo_segundos - aviso_segundos - (time.monotonic() - inicio_espera)
-        )
-        time.sleep(tempo_ate_aviso)
-        _notificar_canais(
-            f"⏰ Atenção! As próximas ofertas serão enviadas em "
-            f"{aviso_segundos // 60} minuto(s)."
-        )
-
-    tempo_restante = max(0, intervalo_segundos - (time.monotonic() - inicio_espera))
-    time.sleep(tempo_restante)
+    logger.info("Aguardando %d minutos para a próxima busca.", intervalo_min)
+    time.sleep(intervalo_min * 60)
 
 
 def executar_ciclo(nicho: Optional[dict] = None) -> int:
@@ -303,11 +285,7 @@ def rodar_loop():
 
             if nichos:
                 indice_atual = (indice_atual + 1) % total_nichos
-                proximo_nicho = nichos[indice_atual]["nome"]
-            else:
-                proximo_nicho = "Geral"
             intervalo_min = getattr(config, "CHECK_INTERVAL_MINUTES", 4)
-            intervalo_min = getattr(config, "CHECK_INTERVAL_MINUTES", 4)
-            _aguardar_proxima_rodada(intervalo_min, proximo_nicho)
+            _aguardar_proxima_rodada(intervalo_min)
     except KeyboardInterrupt:
         logger.info("Bot interrompido pelo usuário.")

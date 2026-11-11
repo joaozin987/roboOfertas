@@ -80,34 +80,20 @@ Telegram** abaixo para saber como obter `TELEGRAM_BOT_TOKEN` e
 > ⚠️ O arquivo `.env` nunca deve ser commitado — ele já está listado no
 > `.gitignore`.
 
-### 4. Testar o envio da primeira mensagem
+### 4. Validar o envio sem publicar
 
-Por padrão, `TEST_MODE=true` no `.env.example`, então o bot só **imprime
-no terminal** a mensagem que seria enviada, sem publicar de verdade:
+Para executar uma rodada sem publicar, defina `TEST_MODE=true` no `.env`:
+
+```bash
+python main.py --uma-vez
+```
+
+Quando estiver pronto para publicar de verdade nos canais configurados,
+confirme que `TEST_MODE=false` está definido no `.env` e execute:
 
 ```bash
 python main.py
 ```
-
-Saída esperada:
-
-```text
-[INFO] Bot iniciado
-[INFO] Enviando mensagem de teste para o Telegram
-[INFO] TEST_MODE ativo: mensagem não enviada de verdade.
-[TESTE] Mensagem que seria enviada ao Telegram:
-
-✅ Bot de Promoções conectado com sucesso!
-
-Esta é uma mensagem de teste da Fase 1.
-
-Não publicado no Telegram (TEST_MODE=true).
-[INFO] Mensagem de teste enviada com sucesso
-[INFO] Execução finalizada
-```
-
-Quando quiser publicar de verdade no canal, defina `TEST_MODE=false` no
-`.env` e rode `python main.py` novamente.
 
 ---
 
@@ -150,19 +136,35 @@ Quando quiser publicar de verdade no canal, defina `TEST_MODE=false` no
 |--------------------------------|:---------------------:|-------------------------------------------------------------------|
 | `TELEGRAM_BOT_TOKEN`           | Sim (se `TEST_MODE=false`) | Token do bot, gerado pelo BotFather                          |
 | `TELEGRAM_CHANNEL_ID`          | Sim (se `TEST_MODE=false`) | ID ou `@username` do canal onde o bot publica                |
-| `TEST_MODE`                    | Não (padrão `true`)   | Se `true`, não publica de verdade — só mostra no terminal        |
+| `TEST_MODE`                    | Não (padrão `false`)  | Se `true`, não publica de verdade — só mostra no terminal        |
 | `MERCADO_LIVRE_CLIENT_ID`      | Não (Fase 3)           | Usado apenas a partir da integração com o Mercado Livre           |
 | `MERCADO_LIVRE_CLIENT_SECRET`  | Não (Fase 3)           | Usado apenas a partir da integração com o Mercado Livre           |
 | `AFILIADO_ID`                  | Não (Fase 3+)          | Identificador de afiliado usado ao montar os links               |
 | `CUPOM_DESCONTO`               | Não (Fase 3+)          | Cupom padrão a ser exibido nas mensagens, se aplicável            |
 | `CHECK_INTERVAL_MINUTES`       | Não (Fase 6)           | Intervalo entre rodadas automáticas                                |
-| `ROUND_ALERT_MINUTES_BEFORE`   | Não (padrão `1`)       | Minutos de antecedência do aviso da próxima rodada                  |
 | `MAX_PROMOTIONS_PER_RUN`       | Não (Fase 4+)          | Limite de promoções publicadas por execução                       |
 
-Ao final de cada rodada, o bot avisa que ela terminou e informa quando a
-próxima começará. Também envia um lembrete antes da próxima rodada, pelo
-Telegram e pelo WhatsApp configurados. O prazo do lembrete pode ser alterado
-com `ROUND_ALERT_MINUTES_BEFORE`.
+O bot aguarda `CHECK_INTERVAL_MINUTES` entre as buscas sem enviar mensagens
+de status aos canais. Se `data/ml_ofertas.json` estiver vencido (mais de 12
+horas), o bot tenta buscar ofertas diretamente no Mercado Livre.
+
+### Atualizar as fontes de ofertas
+
+Se o Mercado Livre redirecionar a busca para uma verificação de conta, atualize
+o arquivo de ofertas pelo navegador:
+
+```bash
+python coletar_ml.py 1
+```
+
+Uma janela do Chrome será aberta. Entre na sua conta ou resolva a verificação
+se solicitada. Se interromper com Ctrl+C, as ofertas já coletadas serão salvas;
+se nenhuma oferta for coletada, o arquivo anterior será preservado. Pare o bot
+antes de atualizar o arquivo e inicie `python main.py` depois da coleta.
+
+A Shopee usa o arquivo exportado do painel de afiliados em
+`data/shopee_oferta.json`; substitua-o por uma exportação recente. Arquivos
+vencidos são ignorados para evitar publicar ofertas antigas.
 
 ---
 
