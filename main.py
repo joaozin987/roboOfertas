@@ -27,8 +27,9 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 
-from app.bot import enviar_mensagem_teste, executar_ciclo, rodar_loop
+from app.bot import ML_JSON_MAX_IDADE_HORAS, enviar_mensagem_teste, executar_ciclo, rodar_loop
 from app.mercado_livre_api import MercadoLivreAPI
+from app.ml_upload import iniciar_receptor
 
 # Credenciais da aplicação do Mercado Livre (vêm do .env, nada fixo no código)
 ML_CLIENT_ID = os.getenv("ML_CLIENT_ID", "").strip()
@@ -65,4 +66,5 @@ if __name__ == "__main__":
     elif "--uma-vez" in sys.argv:
         executar_ciclo()
     else:
+        iniciar_receptor(ML_JSON_MAX_IDADE_HORAS)
         rodar_loop()

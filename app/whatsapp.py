@@ -4,6 +4,7 @@ Envio de ofertas para o grupo do WhatsApp via Evolution API (v2).
 
 import logging
 import os
+import re
 
 import requests
 
@@ -37,12 +38,15 @@ def _get_headers(api_key: str) -> dict:
     return {"apikey": api_key, "Content-Type": "application/json"}
 
 
-def _post(endpoint: str, payload: dict, api_key: str, timeout: int, rotulo: str) -> bool:
+def _post(endpoint: str, payload: dict, api_key: str, timeout: int, rotulo: str, *, privado: bool = False) -> bool:
     try:
         resposta = requests.post(
             endpoint, json=payload, headers=_get_headers(api_key), timeout=timeout
         )
     except requests.exceptions.ReadTimeout:
+        if privado:
+            logger.warning("[WhatsApp] Entrega do alerta privado não confirmada (timeout).")
+            return False
         # A Evolution recebeu o pedido mas demorou a responder (comum ao baixar a imagem):
         # provavelmente entregou. Retornar False dispararia o texto e o grupo veria a oferta duas vezes.
         logger.warning(
@@ -60,9 +64,26 @@ def _post(endpoint: str, payload: dict, api_key: str, timeout: int, rotulo: str)
 
     logger.error(
         "[WhatsApp] Erro ao enviar %s. Status: %s - %s",
-        rotulo, resposta.status_code, resposta.text[:300],
+        rotulo, resposta.status_code, "" if privado else resposta.text[:300],
     )
     return False
+
+
+def enviar_alerta_privado(texto: str) -> bool:
+    """Envia um alerta usando exclusivamente o número administrativo."""
+    if getattr(config, "TEST_MODE", False):
+        logger.info("[WhatsApp] Alerta privado simulado (TEST_MODE=true).")
+        return True
+
+    numero = os.getenv("WHATSAPP_ADMIN_NUMBER", "").strip().removeprefix("+")
+    cfg = _obter_config()
+    if not re.fullmatch(r"[1-9][0-9]{7,14}", numero) or not (cfg["url"] and cfg["key"]):
+        logger.warning("[WhatsApp] Alerta privado indisponível. Confira o número e a configuração da Evolution.")
+        return False
+
+    endpoint = f"{cfg['url']}/message/sendText/{cfg['instance']}"
+    payload = {"number": numero, "text": texto, "linkPreview": False}
+    return _post(endpoint, payload, cfg["key"], timeout=5, rotulo="alerta privado", privado=True)
 
 
 def enviar_mensagem(texto: str) -> bool:

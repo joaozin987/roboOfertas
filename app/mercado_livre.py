@@ -13,11 +13,14 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
-from app import config
+from app import config, whatsapp
 from app.afiliados import gerar_link_afiliado
 
 logger = logging.getLogger(__name__)
 BASE_URL = "https://www.mercadolivre.com.br"
+_proxima_busca_http = 0.0
+_alerta_verificacao_entregue = False
+INTERVALO_VERIFICACAO_S = 30 * 60
 
 
 def _preco_maximo() -> float:
@@ -236,6 +239,10 @@ def _url_indica_verificacao(url: str) -> bool:
 
 def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[int] = None) -> List[Dict]:
     """Busca ofertas no Mercado Livre via requisições HTTP requests + cookies injetados."""
+    global _proxima_busca_http, _alerta_verificacao_entregue
+    if time.monotonic() < _proxima_busca_http:
+        return []
+
     paginas_para_buscar = max_paginas or getattr(config, "SCRAPER_MAX_PAGINAS", 3)
     promocoes = []
     vistos = set()
@@ -252,10 +259,16 @@ def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[in
         try:
             response = requests.get(url, headers=headers, timeout=20)
             if _url_indica_verificacao(response.url):
+                _proxima_busca_http = time.monotonic() + INTERVALO_VERIFICACAO_S
                 logger.warning(
                     "ML HTTP: acesso redirecionado para verificação de conta; "
                     "use coletar_ml.py no navegador para atualizar as ofertas."
                 )
+                if not _alerta_verificacao_entregue:
+                    _alerta_verificacao_entregue = whatsapp.enviar_alerta_privado(
+                        "Robô de Ofertas: Mercado Livre solicitou verificação de conta. "
+                        "A busca HTTP foi pausada por 30 minutos. Confira a conta pelo canal oficial."
+                    )
                 break
             if response.status_code != 200:
                 logger.warning("ML HTTP status %d em %s", response.status_code, url)
@@ -293,5 +306,8 @@ def buscar_ofertas(url_categoria: Optional[str] = None, max_paginas: Optional[in
             logger.error("Erro ao raspar Mercado Livre via HTTP: %s", err)
             break
 
+    if promocoes and time.monotonic() >= _proxima_busca_http and _alerta_verificacao_entregue:
+        _alerta_verificacao_entregue = False
+        whatsapp.enviar_alerta_privado("Robô de Ofertas: a busca HTTP do Mercado Livre voltou a encontrar ofertas.")
     logger.info("ML HTTP: %d promoções extraídas com sucesso em [%s]", len(promocoes), categoria_nome)
     return promocoes

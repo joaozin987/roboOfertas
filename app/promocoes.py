@@ -251,28 +251,39 @@ def filtrar_por_categoria(promocoes: List[dict]) -> List[dict]:
 # FILTRO DE DESCONTO E PREÇO
 # ============================================================
 
-def filtrar_ofertas(promocoes: List[dict], desconto_min: Optional[float] = None) -> List[dict]:
+def filtrar_ofertas(
+    promocoes: List[dict], desconto_min: Optional[float] = None, *, preco_min: Optional[float] = None
+) -> List[dict]:
     """Aplica DESCONTO_MINIMO, teto de desconto suspeito e faixa de preço."""
     aprovadas = []
 
     if desconto_min is None:
         desconto_min = getattr(config, "DESCONTO_MINIMO", 15.0)
     desconto_max = getattr(config, "DESCONTO_MAXIMO_SUSPEITO", 90.0)
-    preco_min = getattr(config, "PRECO_MINIMO", 20.0)
+    if preco_min is None:
+        preco_min = getattr(config, "PRECO_MINIMO", 20.0)
     preco_max = getattr(config, "PRECO_MAXIMO", 50000.0)
+    descartes = dict(dados_ausentes=0, desconto_baixo=0, desconto_alto=0, preco_baixo=0, preco_alto=0)
 
     for promocao in promocoes:
         desconto = promocao.get("desconto")
         preco_atual = promocao.get("preco_atual")
 
         if desconto is None or preco_atual is None:
+            descartes["dados_ausentes"] += 1
             continue
         if desconto < desconto_min:
+            descartes["desconto_baixo"] += 1
             continue
         if desconto_max and desconto > desconto_max:
+            descartes["desconto_alto"] += 1
             logger.info("Desconto suspeito (%.0f%%) ignorado: %s", desconto, promocao.get("titulo"))
             continue
-        if preco_atual < preco_min or preco_atual > preco_max:
+        if preco_atual < preco_min:
+            descartes["preco_baixo"] += 1
+            continue
+        if preco_atual > preco_max:
+            descartes["preco_alto"] += 1
             continue
 
         aprovadas.append(promocao)
@@ -281,6 +292,8 @@ def filtrar_ofertas(promocoes: List[dict], desconto_min: Optional[float] = None)
         "%s de %s ofertas aprovadas (desconto entre %s%% e %s%%, preço entre R$ %s e R$ %s)",
         len(aprovadas), len(promocoes), desconto_min, desconto_max, preco_min, preco_max,
     )
+    if len(aprovadas) < len(promocoes):
+        logger.info("Descartes por regra (%s): %s", promocoes[0].get("origem", "Mercado Livre"), descartes)
     return aprovadas
 
 
@@ -469,6 +482,8 @@ def preparar_promocoes_para_publicar(
     promocoes_brutas: List[dict],
     limite: Optional[int] = None,
     desconto_min: Optional[float] = None,
+    *,
+    preco_min: Optional[float] = None,
 ) -> List[dict]:
     """duplicadas -> categoria -> desconto/preço -> melhores. Serve para ML e Shopee."""
     logger.info("Iniciando processamento de %s ofertas...", len(promocoes_brutas))
@@ -477,5 +492,5 @@ def preparar_promocoes_para_publicar(
     logger.info("Após remoção de duplicados: %s ofertas.", len(sem_duplicadas))
 
     por_categoria = filtrar_por_categoria(sem_duplicadas)
-    aprovadas = filtrar_ofertas(por_categoria, desconto_min=desconto_min)
+    aprovadas = filtrar_ofertas(por_categoria, desconto_min=desconto_min, preco_min=preco_min)
     return selecionar_melhores(aprovadas, limite=limite)

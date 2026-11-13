@@ -1,8 +1,9 @@
 """
 Coletor do Mercado Livre (roda no SEU PC, na pasta raiz do projeto).
 
-Abre um Chrome de verdade (Playwright), usa um perfil salvo em data/ml_profile
-(então o captcha só precisa ser resolvido uma vez) e grava data/ml_ofertas.json.
+Abre o Chromium (Playwright) com um perfil local em data/ml_profile.
+Se a plataforma solicitar verificação, aguarda a conclusão manual.
+Grava data/ml_ofertas.json quando encontra ofertas.
 
 Uso:
     python coletar_ml.py              # todos os nichos, 5 páginas cada
@@ -18,8 +19,9 @@ import os
 import random
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable, Optional
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
@@ -31,6 +33,7 @@ except ImportError:
     pass
 
 from app import mercado_livre as ml
+from app.ml_upload import enviar_lote
 
 RAIZ = Path(__file__).parent
 PERFIL = RAIZ / "data" / "ml_profile"
@@ -52,12 +55,14 @@ def _aguardar_liberacao(page, url_destino: str) -> bool:
     limite = time.time() + ESPERA_CAPTCHA_S
     while time.time() < limite:
         time.sleep(2)
+        if page.is_closed():
+            return False
         if not _tem_bloqueio(page.url):
             return True
     return False
 
 
-def coletar(max_paginas: int) -> list:
+def coletar(max_paginas: int, salvar_parcial: Optional[Callable[[list], None]] = None) -> list:
     PERFIL.mkdir(parents=True, exist_ok=True)
     todas, vistos = [], set()
 
@@ -65,10 +70,11 @@ def coletar(max_paginas: int) -> list:
         with sync_playwright() as pw:
             contexto = pw.chromium.launch_persistent_context(
                 user_data_dir=str(PERFIL),
+                channel=os.getenv("ML_BROWSER_CHANNEL") or None,
+                chromium_sandbox=True,
                 headless=False,  # janela visível: necessário para resolver captcha
                 locale="pt-BR",
                 viewport={"width": 1366, "height": 850},
-                args=["--disable-blink-features=AutomationControlled"],
             )
             try:
                 page = contexto.pages[0] if contexto.pages else contexto.new_page()
@@ -118,12 +124,17 @@ def coletar(max_paginas: int) -> list:
                                 todas.append(promo)
                                 novos += 1
                         print(f"  pág {pagina}: {len(cards)} cards, {novos} aproveitados")
+                        if novos and salvar_parcial is not None:
+                            salvar_parcial(todas)
                         time.sleep(3 + random.random() * 2)
 
                     if bloqueado:
                         break
             finally:
-                contexto.close()
+                try:
+                    contexto.close()
+                except Exception as erro:
+                    print(f"  falha ao fechar o navegador: {erro}")
     except KeyboardInterrupt:
         print(f"\nColeta interrompida. Salvando {len(todas)} ofertas coletadas até agora.")
 
@@ -139,7 +150,7 @@ def salvar_ofertas(ofertas: list) -> None:
     try:
         with open(temporario, "w", encoding="utf-8") as f:
             json.dump(
-                {"gerado_em": datetime.now().isoformat(), "ofertas": ofertas},
+                {"gerado_em": datetime.now(timezone.utc).isoformat(), "ofertas": ofertas},
                 f,
                 ensure_ascii=False,
                 indent=2,
@@ -152,12 +163,25 @@ def salvar_ofertas(ofertas: list) -> None:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--reenviar"]:
+        try:
+            if not enviar_lote(SAIDA):
+                raise RuntimeError("Configure ML_UPLOAD_URL e ML_UPLOAD_TOKEN para reenviar.")
+        except (OSError, RuntimeError) as erro:
+            raise SystemExit(str(erro)) from erro
+        print("Lote recebido pelo Railway.")
+        raise SystemExit(0)
     paginas = int(sys.argv[1]) if len(sys.argv) > 1 else 5
     if paginas < 1:
         raise SystemExit("Informe pelo menos uma página para coletar.")
     try:
-        ofertas = coletar(paginas)
+        ofertas = coletar(paginas, salvar_parcial=salvar_ofertas)
         salvar_ofertas(ofertas)
     except RuntimeError as erro:
         raise SystemExit(str(erro)) from erro
     print(f"\n{len(ofertas)} ofertas salvas em {SAIDA}")
+    try:
+        if enviar_lote(SAIDA):
+            print("Lote recebido pelo Railway.")
+    except RuntimeError as erro:
+        raise SystemExit(f"JSON salvo localmente. {erro}") from erro

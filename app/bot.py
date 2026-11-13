@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from app import afiliados, config, database, mercado_livre, promocoes, telegram, whatsapp
+from app.ml_upload import caminho_lote
 
 try:
     from app import shopee
@@ -149,7 +150,7 @@ def _obter_cotas_envio() -> tuple:
 
 def _ler_ofertas_ml_json() -> List[Dict]:
     """Lê data/ml_ofertas.json (gerado pelo coletar_ml.py rodando no PC)."""
-    caminho = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "ml_ofertas.json")
+    caminho = caminho_lote()
     try:
         with open(caminho, encoding="utf-8") as f:
             dados = json.load(f)
@@ -212,8 +213,13 @@ def _candidatos_shopee(limite: int) -> List[Dict]:
         url_shopee = _proximo_nicho_shopee()
         brutas = (fn_buscar(url_categoria=url_shopee) if url_shopee else fn_buscar()) or []
         ineditas = _filtrar_apenas_ineditas(brutas)
-        return promocoes.preparar_promocoes_para_publicar(ineditas, limite=limite, desconto_min=getattr(config, "SHOPEE_MIN_DESCONTO", None))
+        logger.info("Shopee: %d de %d ofertas inéditas com ID.", len(ineditas), len(brutas))
+        return promocoes.preparar_promocoes_para_publicar(
+            ineditas, limite=limite, desconto_min=config.SHOPEE_MIN_DESCONTO,
+            preco_min=config.SHOPEE_PRECO_MINIMO,
+        )
     except Exception:
+        logger.exception("Shopee: falha ao preparar ofertas.")
         return []
 
 
