@@ -438,23 +438,123 @@ def _emoji_da_categoria(categoria: str) -> str:
     return "⭐"
 
 
-# Aberturas discretas para uma comunicacao profissional de curadoria.
-_GANCHOS_JPZ = {
-    "tecnologia": ["💻 Seleção Jpz | Tecnologia", "💻 Destaque em tecnologia"],
-    "games": ["🎮 Seleção Jpz | Games", "🎮 Destaque gamer"],
-    "moda": ["👟 Seleção Jpz | Moda", "👟 Destaque em moda"],
-    "casa": ["🏠 Seleção Jpz | Casa", "🏠 Destaque para sua casa"],
-    "cozinha": ["🍳 Seleção Jpz | Cozinha", "🍳 Destaque para cozinha"],
-    "beleza": ["✨ Seleção Jpz | Beleza", "✨ Destaque em beleza"],
-    "esportes": ["💪 Seleção Jpz | Esportes", "💪 Destaque em esportes"],
+# Humor zoeiro do Jpz: piadas relacionadas ao titulo, sem inventar fatos.
+# Ganchos especificos vem antes dos genericos; nao depende de IA externa.
+_GANCHOS_PRODUTO = [
+    (("air fryer", "airfryer", "fritadeira"), [
+        "🍟 A panela de óleo já tá procurando outro emprego! 😂",
+        "🍟 A batata tá feliz. O óleo nem tanto!",
+        "🍟 Até a cozinha pediu pra aposentar a fritura!",
+    ]),
+    (("aspirador robo", "robo aspirador"), [
+        "🤖 Finalmente alguém nessa casa disposto a limpar o chão! 😂",
+        "🤖 A vassoura viu isso e pediu férias!",
+        "🤖 Esse robô trabalha enquanto você finge que não viu a sujeira!",
+    ]),
+    (("headset", "fone gamer"), [
+        "🎧 Seu squad pode até não te escutar, mas olha esse achado! 😂",
+        "🎧 O microfone não resolve o rage, mas ajuda no setup!",
+        "🎧 Até o vizinho ficou curioso com esse headset!",
+    ]),
+    (("mouse",), [
+        "🖱️ Se a mira tá ruim, pelo menos o mouse não precisa sofrer! 😂",
+        "🖱️ O clique é seu. A desculpa pro lag também!",
+        "🖱️ Até o cursor parou pra olhar essa oferta!",
+    ]),
+    (("teclado",), [
+        "⌨️ O teclado antigo já tá digitando o pedido de demissão!",
+        "⌨️ CTRL + ALT + QUERO ESSE ACHADO! 😂",
+        "⌨️ Seu teclado cansou de levar a culpa pelas derrotas!",
+    ]),
+    (("tenis", "sneaker"), [
+        "👟 O tênis é novo. A desculpa pra não treinar continua! 😂",
+        "👟 Seu tênis antigo já tá pedindo aposentadoria!",
+        "👟 Comprar tênis é fácil. Difícil é começar a correr!",
+    ]),
+    (("cafeteira", "maquina de cafe"), [
+        "☕ Pra quem só começa a funcionar depois do primeiro café!",
+        "☕ Até o despertador pediu uma xícara!",
+        "☕ Seu eu de segunda-feira aprovou a ideia!",
+    ]),
+    (("controle", "joystick"), [
+        "🎮 O controle não joga sozinho, infelizmente! 😂",
+        "🎮 Se perder a partida, não põe a culpa no controle!",
+        "🎮 Seu próximo rage já tem companhia!",
+    ]),
+    (("panela", "frigideira"), [
+        "🍳 Até o miojo ficou se achando gourmet!",
+        "🍳 A receita é simples. Lavar a louça continua difícil!",
+        "🍳 A cozinha tá pedindo reforços!",
+    ]),
+    (("perfume", "colonia"), [
+        "✨ Chegar chegando, mas sem assustar o bolso!",
+        "✨ O crush pode não notar, mas o Jpz notou essa oferta!",
+        "✨ Perfume novo, mesma dificuldade pra escolher roupa! 😂",
+    ]),
+    (("cadeira", "poltrona"), [
+        "🪑 A cadeira antiga ouviu falar em upgrade e ficou nervosa!",
+        "🪑 Sua cadeira já tá fazendo barulho de protesto?",
+        "🪑 Até a cadeira pediu pra sentar e conversar!",
+    ]),
+    (("smartphone", "celular", "iphone"), [
+        "📱 Seu celular antigo já tá fingindo que não ouviu!",
+        "📱 A bateria do seu celular caiu só de ver esse achado! 😂",
+        "📱 O grupo da família vai querer saber desse achado!",
+    ]),
+    (("notebook", "laptop"), [
+        "💻 Seu notebook antigo abriu 37 abas só pra reclamar!",
+        "💻 O computador travou, mas o Jpz não!",
+        "💻 Até a ventoinha parou pra prestar atenção!",
+    ]),
+    (("smart tv", "televisao", "tv "), [
+        "📺 A novela é a mesma, mas a tela pode mudar!",
+        "📺 Até o controle remoto ficou animado!",
+        "📺 O sofá já tá preparando a pipoca!",
+    ]),
+    (("mochila",), [
+        "🎒 Sua mochila antiga já pediu transferência!",
+        "🎒 Cabe muita coisa. A preguiça de segunda não!",
+        "🎒 Até o zíper ficou curioso!",
+    ]),
+    (("relogio", "smartwatch"), [
+        "⌚ Tá na hora de olhar esse achado. Literalmente! 😂",
+        "⌚ O tempo voa, mas essa oferta chamou atenção!",
+        "⌚ Até o despertador ficou com ciúme!",
+    ]),
+    (("ventilador",), [
+        "🌬️ O calor chegou sem convite. O Jpz trouxe uma ideia!",
+        "🌬️ Até o calor ficou sem graça!",
+        "🌬️ Seu verão já pediu reforço!",
+    ]),
+    (("liquidificador",), [
+        "🥤 Até a vitamina ficou animada com esse achado!",
+        "🥤 O liquidificador antigo tá fazendo um barulho de protesto!",
+        "🥤 Mistura tudo, menos o preço com a desculpa! 😂",
+    ]),
+]
+_GANCHOS_CATEGORIA = {
+    "tecnologia": ["💻 O setup pediu upgrade e mandou o boleto pra você! 😂", "💻 Seu gadget antigo já tá desconfiado!"],
+    "games": ["🎮 Habilidade não vem na caixa, mas olha esse achado!", "🎮 Até o lobby parou pra conferir!"],
+    "moda": ["👕 O guarda-roupa pediu socorro de novo!", "👟 O estilo chamou e a carteira fingiu que não ouviu!"],
+    "casa": ["🏠 A casa quer novidade. O boleto que lute! 😂", "🏠 Até a lista de compras ficou curiosa!"],
+    "cozinha": ["🍳 Até o miojo pediu um upgrade!", "🍳 A cozinha chamou reforços!"],
+    "beleza": ["✨ O nécessaire pediu mais espaço. De novo!", "✨ Até o espelho ficou curioso!"],
+    "esportes": ["💪 O treino não se faz sozinho, infelizmente!", "💪 A academia chamou. O Jpz atendeu!"],
 }
-_GANCHOS_GERAIS = ["🔎 Seleção Jpz | Ofertas", "🔎 Destaque Jpz Ofertas"]
+_GANCHOS_GERAIS = ["👀 O Jpz achou e a carteira já ficou desconfiada! 😂", "🔎 Mais um achado pra testar o autocontrole!"]
 
 
 def _gancho_jpz(promocao: dict) -> str:
+    titulo = _normalizar_texto(promocao.get("titulo") or "")
     categoria = _normalizar_texto(promocao.get("categoria") or "")
-    chave = next((nome for nome in _GANCHOS_JPZ if nome in categoria), None)
-    opcoes = _GANCHOS_JPZ[chave] if chave else _GANCHOS_GERAIS
+    opcoes = None
+    for palavras, frases in _GANCHOS_PRODUTO:
+        if any(re.search(r"(?<!\\w)" + re.escape(palavra) + r"(?!\\w)", titulo) for palavra in palavras):
+            opcoes = frases
+            break
+    if opcoes is None:
+        chave = next((nome for nome in _GANCHOS_CATEGORIA if nome in categoria), None)
+        opcoes = _GANCHOS_CATEGORIA[chave] if chave else _GANCHOS_GERAIS
     identidade = str(promocao.get("produto_id") or promocao.get("url_produto") or promocao.get("titulo") or "")
     indice = int(hashlib.sha256(identidade.encode("utf-8")).hexdigest()[:8], 16) % len(opcoes)
     return opcoes[indice]
