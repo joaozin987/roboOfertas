@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from app import afiliados, config, database, mercado_livre, promocoes, telegram, whatsapp
@@ -151,6 +152,13 @@ def _obter_cotas_envio() -> tuple:
 def _ler_ofertas_ml_json() -> List[Dict]:
     """Lê data/ml_ofertas.json (gerado pelo coletar_ml.py rodando no PC)."""
     caminho = caminho_lote()
+    # O volume /ofertas pode estar vazio mesmo com o JSON versionado no GitHub.
+    # Nesse caso, tentar o arquivo incluido no deploy, sem ignorar o limite de idade.
+    if not caminho.is_file():
+        alternativa = Path(__file__).resolve().parents[1] / "data" / "ml_ofertas.json"
+        if alternativa.is_file() and alternativa != caminho:
+            logger.warning("ML JSON: %s ausente; usando arquivo do deploy: %s", caminho, alternativa)
+            caminho = alternativa
     try:
         with open(caminho, encoding="utf-8") as f:
             dados = json.load(f)

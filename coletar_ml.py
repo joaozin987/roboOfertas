@@ -183,5 +183,9 @@ if __name__ == "__main__":
     try:
         if enviar_lote(SAIDA):
             print("Lote recebido pelo Railway.")
+        else:
+            print("AVISO: lote salvo apenas no PC; envio ao Railway nao configurado.")
+            print("Configure ML_UPLOAD_URL e ML_UPLOAD_TOKEN no .env local.")
+            print("Depois execute: python coletar_ml.py --reenviar")
     except RuntimeError as erro:
         raise SystemExit(f"JSON salvo localmente. {erro}") from erro
