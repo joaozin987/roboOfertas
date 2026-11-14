@@ -10,6 +10,7 @@ Responsável por:
 - montar a mensagem final formatada para o Telegram.
 """
 
+import hashlib
 import logging
 import re
 import unicodedata
@@ -437,8 +438,30 @@ def _emoji_da_categoria(categoria: str) -> str:
     return "⭐"
 
 
+# Ganchos curtos, baseados apenas na categoria (sem promessas inventadas).
+_GANCHOS_JPZ = {
+    "tecnologia": ["🔎 ACHADO DO JPZ PRA QUEM CURTE TECNOLOGIA", "💻 O JPZ GARIMPOU UM ACHADO TECH"],
+    "games": ["🎮 PRA QUEM CURTE JOGAR, OLHA ESSE ACHADO", "🔎 O JPZ ENCONTROU UMA OFERTA GAMER"],
+    "moda": ["👟 O JPZ ACHOU UMA OFERTA PRA RENOVAR O VISUAL", "🔎 ACHADO DO JPZ PRA QUEM CURTE MODA"],
+    "casa": ["🏠 UM ACHADO DO JPZ PRA SUA CASA", "🔎 OLHA O QUE O JPZ ENCONTROU PRA CASA"],
+    "cozinha": ["🍳 PRA QUEM CURTE COZINHAR, OLHA ESSA", "🔎 O JPZ GARIMPOU UM ACHADO PRA COZINHA"],
+    "beleza": ["✨ UM ACHADO DO JPZ PRA AUTOCUIDADO", "🔎 OLHA ESSA OFERTA DE BELEZA"],
+    "esportes": ["💪 PRA QUEM CURTE TREINAR, OLHA ESSA", "🔎 O JPZ ACHOU UMA OFERTA ESPORTIVA"],
+}
+_GANCHOS_GERAIS = ["🔎 ACHADO DO JPZ", "👀 OLHA O QUE O JPZ ENCONTROU", "🔥 O JPZ GARIMPOU ESSA OFERTA"]
+
+
+def _gancho_jpz(promocao: dict) -> str:
+    categoria = _normalizar_texto(promocao.get("categoria") or "")
+    chave = next((nome for nome in _GANCHOS_JPZ if nome in categoria), None)
+    opcoes = _GANCHOS_JPZ[chave] if chave else _GANCHOS_GERAIS
+    identidade = str(promocao.get("produto_id") or promocao.get("url_produto") or promocao.get("titulo") or "")
+    indice = int(hashlib.sha256(identidade.encode("utf-8")).hexdigest()[:8], 16) % len(opcoes)
+    return opcoes[indice]
+
+
 def montar_mensagem(promocao: dict) -> str:
-    """Monta a mensagem formatada. O cupom só aparece se vier NA PRÓPRIA oferta."""
+    """Mensagem curta com identidade Jpz e dados reais da oferta."""
     titulo = (promocao.get("titulo") or "Produto").strip()
     if len(titulo) > LIMITE_TITULO:
         titulo = titulo[: LIMITE_TITULO - 3].rstrip() + "..."
@@ -448,29 +471,21 @@ def montar_mensagem(promocao: dict) -> str:
     desconto = promocao.get("desconto")
     cupom = promocao.get("cupom")
     link = promocao.get("url_afiliado") or promocao.get("url_produto")
-    categoria = promocao.get("categoria") or "Destaques"
 
-    linhas = [
-        "🔥 OFERTA DO DIA",
-        "",
-        f"{_emoji_da_categoria(categoria)} {categoria.upper()}",
-        "",
-        f"🛍️ {titulo}",
-        "",
-    ]
+    linhas = [_gancho_jpz(promocao), f"🛍️ {titulo}"]
+    if preco_anterior is not None and preco_atual is not None and preco_anterior > preco_atual:
+        linhas.append(f"De {_formatar_preco(preco_anterior)} → por {_formatar_preco(preco_atual)}")
+    elif preco_atual is not None:
+        linhas.append(f"💰 Por {_formatar_preco(preco_atual)}")
 
-    if preco_anterior:
-        linhas.append(f"💰 De: {_formatar_preco(preco_anterior)}")
-    if preco_atual is not None:
-        linhas.append(f"🔥 Por: {_formatar_preco(preco_atual)}")
-    if desconto:
-        linhas.append(f"📉 Desconto: {desconto:.0f}%")
+    if desconto is not None and desconto > 0:
+        linhas.append(f"📉 {desconto:.0f}% OFF")
     if cupom:
-        linhas.extend(["", f"🏷️ CUPOM: {cupom}"])
+        linhas.append(f"🏷️ Cupom: {cupom}")
     if link:
-        linhas.extend(["", "🛒 COMPRAR AGORA:", link])
+        linhas.append(f"👉 {link}")
 
-    linhas.extend(["", "⚠️ Preço e disponibilidade podem mudar sem aviso."])
+    linhas.append("🤖 Achado do Jpz | Link de afiliado")
     return "\n".join(linhas)
 
 
