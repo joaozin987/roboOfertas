@@ -438,17 +438,17 @@ def _emoji_da_categoria(categoria: str) -> str:
     return "⭐"
 
 
-# Ganchos curtos, baseados apenas na categoria (sem promessas inventadas).
+# Aberturas discretas para uma comunicacao profissional de curadoria.
 _GANCHOS_JPZ = {
-    "tecnologia": ["🔎 ACHADO DO JPZ PRA QUEM CURTE TECNOLOGIA", "💻 O JPZ GARIMPOU UM ACHADO TECH"],
-    "games": ["🎮 PRA QUEM CURTE JOGAR, OLHA ESSE ACHADO", "🔎 O JPZ ENCONTROU UMA OFERTA GAMER"],
-    "moda": ["👟 O JPZ ACHOU UMA OFERTA PRA RENOVAR O VISUAL", "🔎 ACHADO DO JPZ PRA QUEM CURTE MODA"],
-    "casa": ["🏠 UM ACHADO DO JPZ PRA SUA CASA", "🔎 OLHA O QUE O JPZ ENCONTROU PRA CASA"],
-    "cozinha": ["🍳 PRA QUEM CURTE COZINHAR, OLHA ESSA", "🔎 O JPZ GARIMPOU UM ACHADO PRA COZINHA"],
-    "beleza": ["✨ UM ACHADO DO JPZ PRA AUTOCUIDADO", "🔎 OLHA ESSA OFERTA DE BELEZA"],
-    "esportes": ["💪 PRA QUEM CURTE TREINAR, OLHA ESSA", "🔎 O JPZ ACHOU UMA OFERTA ESPORTIVA"],
+    "tecnologia": ["💻 Seleção Jpz | Tecnologia", "💻 Destaque em tecnologia"],
+    "games": ["🎮 Seleção Jpz | Games", "🎮 Destaque gamer"],
+    "moda": ["👟 Seleção Jpz | Moda", "👟 Destaque em moda"],
+    "casa": ["🏠 Seleção Jpz | Casa", "🏠 Destaque para sua casa"],
+    "cozinha": ["🍳 Seleção Jpz | Cozinha", "🍳 Destaque para cozinha"],
+    "beleza": ["✨ Seleção Jpz | Beleza", "✨ Destaque em beleza"],
+    "esportes": ["💪 Seleção Jpz | Esportes", "💪 Destaque em esportes"],
 }
-_GANCHOS_GERAIS = ["🔎 ACHADO DO JPZ", "👀 OLHA O QUE O JPZ ENCONTROU", "🔥 O JPZ GARIMPOU ESSA OFERTA"]
+_GANCHOS_GERAIS = ["🔎 Seleção Jpz | Ofertas", "🔎 Destaque Jpz Ofertas"]
 
 
 def _gancho_jpz(promocao: dict) -> str:
@@ -461,7 +461,7 @@ def _gancho_jpz(promocao: dict) -> str:
 
 
 def montar_mensagem(promocao: dict) -> str:
-    """Mensagem curta com identidade Jpz e dados reais da oferta."""
+    """Mensagem limpa e espaçada, com informações verificáveis da oferta."""
     titulo = (promocao.get("titulo") or "Produto").strip()
     if len(titulo) > LIMITE_TITULO:
         titulo = titulo[: LIMITE_TITULO - 3].rstrip() + "..."
@@ -472,21 +472,22 @@ def montar_mensagem(promocao: dict) -> str:
     cupom = promocao.get("cupom")
     link = promocao.get("url_afiliado") or promocao.get("url_produto")
 
-    linhas = [_gancho_jpz(promocao), f"🛍️ {titulo}"]
+    blocos = [_gancho_jpz(promocao), f"🛍️ {titulo}"]
+
     if preco_anterior is not None and preco_atual is not None and preco_anterior > preco_atual:
-        linhas.append(f"De {_formatar_preco(preco_anterior)} → por {_formatar_preco(preco_atual)}")
+        blocos.append(f"De {_formatar_preco(preco_anterior)} → por {_formatar_preco(preco_atual)}")
     elif preco_atual is not None:
-        linhas.append(f"💰 Por {_formatar_preco(preco_atual)}")
+        blocos.append(f"Por {_formatar_preco(preco_atual)}")
 
     if desconto is not None and desconto > 0:
-        linhas.append(f"📉 {desconto:.0f}% OFF")
+        blocos.append(f"📉 {desconto:.0f}% de desconto")
     if cupom:
-        linhas.append(f"🏷️ Cupom: {cupom}")
+        blocos.append(f"🏷️ Cupom: {cupom}")
     if link:
-        linhas.append(f"👉 {link}")
+        blocos.append(f"🔗 Confira a oferta:\n{link}")
 
-    linhas.append("🤖 Achado do Jpz | Link de afiliado")
-    return "\n".join(linhas)
+    blocos.append("Jpz Ofertas • Link de afiliado")
+    return "\n\n".join(blocos)
 
 
 # ============================================================
