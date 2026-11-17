@@ -150,20 +150,31 @@ def _obter_cotas_envio() -> tuple:
 
 
 def _ler_ofertas_ml_json() -> List[Dict]:
-    """Lê data/ml_ofertas.json (gerado pelo coletar_ml.py rodando no PC)."""
+    """Prioriza o volume e recorre ao lote do deploy se ele estiver atual."""
     caminho = caminho_lote()
-    # O volume /ofertas pode estar vazio mesmo com o JSON versionado no GitHub.
-    # Nesse caso, tentar o arquivo incluido no deploy, sem ignorar o limite de idade.
-    if not caminho.is_file():
-        alternativa = Path(__file__).resolve().parents[1] / "data" / "ml_ofertas.json"
-        if alternativa.is_file() and alternativa != caminho:
-            logger.warning("ML JSON: %s ausente; usando arquivo do deploy: %s", caminho, alternativa)
-            caminho = alternativa
+    ofertas = _ler_lote_ml_atual(caminho)
+    if ofertas:
+        return ofertas
+
+    alternativa = Path(__file__).resolve().parents[1] / "data" / "ml_ofertas.json"
+    if alternativa == caminho or not alternativa.is_file():
+        return []
+    ofertas = _ler_lote_ml_atual(alternativa)
+    if ofertas:
+        logger.info("ML JSON: usando lote atual do deploy (%d ofertas).", len(ofertas))
+    return ofertas
+
+
+def _ler_lote_ml_atual(caminho: Path) -> List[Dict]:
     try:
         with open(caminho, encoding="utf-8") as f:
             dados = json.load(f)
     except Exception as erro:
-        logger.error("ML JSON: erro lendo %s: %s", caminho, erro)
+        logger.warning("ML JSON: erro lendo %s: %s", caminho, erro)
+        return []
+
+    if not isinstance(dados, dict) or not isinstance(dados.get("ofertas"), list):
+        logger.warning("ML JSON: formato inválido em %s.", caminho)
         return []
 
     try:
