@@ -1,23 +1,29 @@
-"""
-Shopee: lê as ofertas copiadas do painel de afiliados (resposta da chamada
-"offer/product/list") de um arquivo e entrega prontas para o bot.
-O link de afiliado é gerado dinamicamente para evitar links expirados.
+"""Consulta a Open API Shopee ou lê o arquivo legado de ofertas."""
 
-Arquivo lido: data/shopee_oferta.json (pode ter várias respostas coladas em sequência)
-"""
-
+import hashlib
 import json
 import logging
+import math
+import os
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import quote, urlparse, urlunparse
+
+import requests
 
 from app import config
 
 logger = logging.getLogger(__name__)
 
 IMG_BASE = "https://down-br.img.susercontent.com/file/"
+API_URL = "https://open-api.affiliate.shopee.com.br/graphql"
+API_REFRESH_SECONDS = 15 * 60
+API_RETRY_SECONDS = 60
+API_CACHE_MAX_SECONDS = 60 * 60
+_api_offers = []
+_api_fetched_at = None
+_api_next_fetch = 0.0
 
 # Nichos para classificação automática baseada no título do produto
 NICHO_KEYWORDS = {
@@ -191,11 +197,120 @@ def _extrair_promocao(item: dict, min_desc: float, preco_max: float) -> Optional
     }
 
 
+def _consultar_api(app_id: str, secret: str) -> list:
+    ofertas = []
+    for pagina in range(1, 4):
+        consulta = f"""{{ productOfferV2(page: {pagina}, limit: 20, listType: 2) {{
+            nodes {{ itemId shopId productName priceMin priceDiscountRate imageUrl
+                     productLink offerLink periodStartTime periodEndTime }}
+            pageInfo {{ hasNextPage }}
+        }} }}"""
+        corpo = json.dumps({"query": consulta}, separators=(",", ":"))
+        timestamp = str(int(time.time()))
+        assinatura = hashlib.sha256(f"{app_id}{timestamp}{corpo}{secret}".encode()).hexdigest()
+        resposta = requests.post(
+            API_URL,
+            data=corpo.encode(),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"SHA256 Credential={app_id}, Timestamp={timestamp}, Signature={assinatura}",
+            },
+            timeout=(5, 15),
+            allow_redirects=False,
+        )
+        if resposta.status_code != 200:
+            resposta.raise_for_status()
+            raise ValueError("status inesperado")
+        dados = resposta.json()
+        if dados.get("errors"):
+            raise ValueError("consulta GraphQL rejeitada")
+        pagina_ofertas = dados["data"]["productOfferV2"]
+        ofertas.extend(pagina_ofertas["nodes"])
+        if not pagina_ofertas["pageInfo"]["hasNextPage"]:
+            break
+    return ofertas
+
+
+def _oferta_da_api(item: dict, min_desc: float, preco_max: float, agora: float) -> Optional[dict]:
+    try:
+        titulo = item["productName"].strip()
+        atual = float(item["priceMin"])
+        desconto = float(item["priceDiscountRate"])
+        inicio = int(item.get("periodStartTime") or 0)
+        fim = int(item.get("periodEndTime") or 0)
+        shop_id = int(item["shopId"])
+        item_id = int(item["itemId"])
+        url_produto = item["productLink"]
+        url_afiliado = item["offerLink"]
+        if not isinstance(url_produto, str) or not isinstance(url_afiliado, str):
+            return None
+        urls = [urlparse(url) for url in (url_produto, url_afiliado)]
+    except (KeyError, AttributeError, TypeError, ValueError):
+        return None
+
+    if (
+        not titulo or shop_id <= 0 or item_id <= 0
+        or not math.isfinite(atual) or not 0 < atual <= preco_max
+        or not math.isfinite(desconto) or not min_desc <= desconto <= 100
+        or (inicio and inicio > agora) or (fim and fim <= agora)
+        or any(
+            url.scheme != "https"
+            or not (url.hostname == "shopee.com.br" or (url.hostname or "").endswith(".shopee.com.br"))
+            for url in urls
+        )
+    ):
+        return None
+
+    return {
+        "produto_id": f"shopee_{shop_id}_{item_id}",
+        "origem": "shopee",
+        "titulo": titulo,
+        "categoria": _classificar_categoria(titulo),
+        "preco_atual": atual,
+        "preco_anterior": None,
+        "desconto": desconto,
+        "imagem": item.get("imageUrl"),
+        "url_produto": url_produto,
+        "url_afiliado": url_afiliado,
+        "cupom": None,
+    }
+
+
+def _buscar_ofertas_api(app_id: str, secret: str, min_desc: float, preco_max: float) -> List[Dict]:
+    global _api_offers, _api_fetched_at, _api_next_fetch
+    if time.monotonic() >= _api_next_fetch:
+        try:
+            _api_offers = _consultar_api(app_id, secret)
+        except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError) as erro:
+            _api_next_fetch = time.monotonic() + API_RETRY_SECONDS
+            status = erro.response.status_code if isinstance(erro, requests.HTTPError) else None
+            logger.warning("Shopee Open API: falha ao atualizar ofertas (%s).", status or type(erro).__name__)
+        else:
+            _api_fetched_at = time.monotonic()
+            _api_next_fetch = _api_fetched_at + API_REFRESH_SECONDS
+            logger.info("Shopee Open API: %d ofertas recebidas.", len(_api_offers))
+
+    if _api_fetched_at is None or time.monotonic() - _api_fetched_at >= API_CACHE_MAX_SECONDS:
+        return []
+    agora = time.time()
+    validas = {}
+    for item in _api_offers:
+        oferta = _oferta_da_api(item, min_desc, preco_max, agora)
+        if oferta:
+            validas[oferta["produto_id"]] = oferta
+    return sorted(validas.values(), key=lambda oferta: oferta["desconto"], reverse=True)
+
+
 def buscar_ofertas(
     url_categoria: Optional[str] = None, max_paginas: Optional[int] = None
 ) -> List[Dict]:
     min_desc = float(getattr(config, "SHOPEE_MIN_DESCONTO", 20.0))
     preco_max = float(getattr(config, "SHOPEE_PRECO_MAXIMO", 50000.0))
+
+    app_id = os.getenv("SHOPEE_API_APP_ID", "").strip()
+    secret = os.getenv("SHOPEE_API_SECRET", "").strip()
+    if app_id and secret:
+        return _buscar_ofertas_api(app_id, secret, min_desc, preco_max)
 
     itens = _ler_itens()
     logger.info("Shopee: %d itens lidos de %s", len(itens), ARQUIVO)
