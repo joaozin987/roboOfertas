@@ -199,23 +199,25 @@ def _ler_lote_ml_atual(caminho: Path) -> List[Dict]:
 def _candidatos_ml(url_categoria: Optional[str], limite: int) -> List[Dict]:
     if os.getenv("ML_USAR_JSON", "true").strip().lower() == "true":
         todas = _ler_ofertas_ml_json()
-        if todas:
-            nome = next((n["nome"] for n in mercado_livre.NICHOS_ESTRATEGICOS if n["url"] == url_categoria), None)
-            brutas = [o for o in todas if not nome or o.get("categoria") == nome]
-            if brutas:
-                logger.info("ML JSON: %d ofertas lidas [%s]", len(brutas), nome or "todas")
-            else:
-                logger.warning(
-                    "ML JSON: nenhuma oferta para [%s]; tentando busca direta no Mercado Livre.",
-                    nome or "todas",
-                )
-                brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
-        else:
-            logger.warning("ML JSON: sem ofertas atuais; tentando busca direta no Mercado Livre.")
-            brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
-    else:
-        brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
+        nome = next((n["nome"] for n in mercado_livre.NICHOS_ESTRATEGICOS if n["url"] == url_categoria), None)
+        brutas = [o for o in todas if not nome or o.get("categoria") == nome]
+        if brutas:
+            ineditas = _filtrar_apenas_ineditas(brutas)
+            aprovadas = promocoes.preparar_promocoes_para_publicar(
+                ineditas, limite=limite, desconto_min=getattr(config, "MELI_MIN_DESCONTO", None)
+            )
+            logger.info(
+                "ML JSON [%s]: %d lidas, %d inéditas com ID, %d selecionadas.",
+                nome or "todas", len(brutas), len(ineditas), len(aprovadas),
+            )
+            if aprovadas:
+                return aprovadas
+        logger.info(
+            "ML JSON [%s]: sem candidatas publicáveis; tentando busca direta.",
+            nome or "todas",
+        )
 
+    brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
     ineditas = _filtrar_apenas_ineditas(brutas)
     return promocoes.preparar_promocoes_para_publicar(
         ineditas, limite=limite, desconto_min=getattr(config, "MELI_MIN_DESCONTO", None)
