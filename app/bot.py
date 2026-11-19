@@ -152,6 +152,12 @@ def _obter_cotas_envio() -> tuple:
 
 def _ler_ofertas_ml_json() -> List[Dict]:
     """Prioriza o volume e recorre ao lote do deploy se ele estiver atual."""
+    campanha = Path(__file__).resolve().parents[1] / "data" / "ml_campanha.json"
+    if campanha.is_file():
+        agendadas = _ler_lote_ml_atual(campanha, aceitar_campanha=True)
+        if agendadas:
+            return agendadas
+
     caminho = caminho_lote()
     ofertas = _ler_lote_ml_atual(caminho)
     if ofertas:
@@ -166,7 +172,7 @@ def _ler_ofertas_ml_json() -> List[Dict]:
     return ofertas
 
 
-def _ler_lote_ml_atual(caminho: Path) -> List[Dict]:
+def _ler_lote_ml_atual(caminho: Path, *, aceitar_campanha: bool = False) -> List[Dict]:
     try:
         with open(caminho, encoding="utf-8") as f:
             dados = json.load(f)
@@ -186,6 +192,22 @@ def _ler_lote_ml_atual(caminho: Path) -> List[Dict]:
         logger.warning("ML JSON: data de geração ausente ou inválida; ignorando arquivo.")
         return []
 
+    campanha = dados.get("campanha")
+    if aceitar_campanha and isinstance(campanha, dict):
+        try:
+            inicio = datetime.fromisoformat(campanha["inicio"])
+            fim = datetime.fromisoformat(campanha["fim"])
+            ativa = gerado <= inicio <= agora < fim and (fim - gerado).total_seconds() <= 96 * 3600
+        except (KeyError, TypeError, ValueError):
+            return []
+        if ativa:
+            return [
+                dict(oferta, _fila_ml=True, preco_consultado_em=gerado)
+                for oferta in dados["ofertas"]
+                if isinstance(oferta, dict) and _oferta_na_janela(oferta, agora)
+            ]
+        return []
+
     if idade_h < 0 or idade_h > ML_JSON_MAX_IDADE_HORAS:
         logger.warning(
             "ML JSON: arquivo vencido (%.1f h; limite %d h); tentando busca atual.",
@@ -197,11 +219,19 @@ def _ler_lote_ml_atual(caminho: Path) -> List[Dict]:
     return dados.get("ofertas", [])
 
 
+def _oferta_na_janela(oferta: dict, agora: datetime) -> bool:
+    try:
+        horario = datetime.fromisoformat(oferta["publicar_em"])
+        return 0 <= (agora - horario).total_seconds() < 10 * 60
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def _candidatos_ml(url_categoria: Optional[str], limite: int) -> List[Dict]:
     if os.getenv("ML_USAR_JSON", "true").strip().lower() == "true":
         todas = _ler_ofertas_ml_json()
         nome = next((n["nome"] for n in mercado_livre.NICHOS_ESTRATEGICOS if n["url"] == url_categoria), None)
-        brutas = [o for o in todas if not nome or o.get("categoria") == nome]
+        brutas = [o for o in todas if o.get("_fila_ml") or not nome or o.get("categoria") == nome]
         if brutas:
             ineditas = _filtrar_apenas_ineditas(brutas)
             aprovadas = promocoes.preparar_promocoes_para_publicar(

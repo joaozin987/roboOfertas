@@ -574,14 +574,20 @@ def montar_mensagem(promocao: dict) -> str:
 
     blocos = [_gancho_jpz(promocao), f"🛍️ {titulo}"]
 
-    if preco_anterior is not None and preco_atual is not None and preco_anterior > preco_atual:
+    consultado = promocao.get("preco_consultado_em")
+    if consultado and preco_atual is not None:
+        blocos.append(
+            f"Preço visto em {consultado:%d/%m}: {_formatar_preco(preco_atual)}. "
+            "Confira o valor e a disponibilidade no link."
+        )
+    elif preco_anterior is not None and preco_atual is not None and preco_anterior > preco_atual:
         blocos.append(f"De {_formatar_preco(preco_anterior)} → por {_formatar_preco(preco_atual)}")
     elif preco_atual is not None:
         blocos.append(f"Por {_formatar_preco(preco_atual)}")
 
-    if desconto is not None and desconto > 0:
+    if not consultado and desconto is not None and desconto > 0:
         blocos.append(f"📉 {desconto:.0f}% de desconto")
-    if cupom:
+    if cupom and not consultado:
         blocos.append(f"🏷️ Cupom: {cupom}")
     if link:
         blocos.append(f"🔗 Confira a oferta:\n{link}")
