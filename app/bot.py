@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from app import afiliados, config, database, mercado_livre, promocoes, telegram, whatsapp
+from app import mercado_livre_ofertas_api
 from app.ml_upload import caminho_lote
 
 try:
@@ -217,7 +218,9 @@ def _candidatos_ml(url_categoria: Optional[str], limite: int) -> List[Dict]:
             nome or "todas",
         )
 
-    brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
+    brutas = mercado_livre_ofertas_api.buscar_ofertas(url_categoria)
+    if not brutas:
+        brutas = mercado_livre.buscar_ofertas(url_categoria=url_categoria) or []
     ineditas = _filtrar_apenas_ineditas(brutas)
     return promocoes.preparar_promocoes_para_publicar(
         ineditas, limite=limite, desconto_min=getattr(config, "MELI_MIN_DESCONTO", None)

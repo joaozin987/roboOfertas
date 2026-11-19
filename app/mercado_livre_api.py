@@ -7,6 +7,7 @@ import os
 import json
 import time
 import logging
+import tempfile
 import requests
 from pathlib import Path
 
@@ -24,9 +25,10 @@ class MercadoLivreAPI:
         self._carregar_tokens()
 
     def _carregar_tokens(self):
-        if TOKEN_FILE.exists():
+        caminho = self._caminho_tokens()
+        if caminho.exists():
             try:
-                with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+                with caminho.open(encoding="utf-8") as f:
                     self.tokens = json.load(f)
             except Exception as erro:
                 logger.warning("Falha ao ler %s: %s", TOKEN_FILE, erro)
@@ -34,16 +36,29 @@ class MercadoLivreAPI:
         else:
             self.tokens = {}
 
+    def _caminho_tokens(self) -> Path:
+        configurado = os.getenv("ML_TOKEN_PATH", "").strip()
+        return Path(configurado) if configurado else TOKEN_FILE
+
     def _salvar_tokens(self, data: dict):
         data["expires_at"] = time.time() + data.get("expires_in", 21600) - 120
         # Se a resposta não trouxer refresh_token, mantém o que já existia
         if not data.get("refresh_token") and self.tokens.get("refresh_token"):
             data["refresh_token"] = self.tokens["refresh_token"]
         logger.info("Tokens salvos (campos: %s)", sorted(data.keys()))
+        caminho = self._caminho_tokens()
+        caminho.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=caminho.parent, delete=False
+        ) as arquivo:
+            temporario = Path(arquivo.name)
+            try:
+                json.dump(data, arquivo, indent=2)
+                arquivo.close()
+                os.replace(temporario, caminho)
+            finally:
+                temporario.unlink(missing_ok=True)
         self.tokens = data
-        TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(TOKEN_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
 
     def inicializar_com_code(self, tg_code: str):
         url = f"{self.base_url}/oauth/token"
@@ -62,7 +77,7 @@ class MercadoLivreAPI:
             logger.info("Conexão oficial com a API do Mercado Livre concluída com sucesso.")
             return True
         else:
-            raise Exception(f"Erro ao trocar token ({res.status_code}): {res.text}")
+            raise ValueError(f"Erro ao trocar token (HTTP {res.status_code})")
 
     def get_token_valido(self) -> str:
         if not self.tokens.get("access_token"):
@@ -93,7 +108,7 @@ class MercadoLivreAPI:
             self._salvar_tokens(res.json())
             return self.tokens["access_token"]
         else:
-            raise Exception(f"Erro ao renovar token ({res.status_code}): {res.text}")
+            raise ValueError(f"Erro ao renovar token (HTTP {res.status_code})")
 
     def atualizar_estoque(self, item_id: str, quantidade: int) -> dict:
         token = self.get_token_valido()
